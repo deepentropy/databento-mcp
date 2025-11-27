@@ -1,0 +1,4 @@
+databento>=0.38.0
+mcp>=0.9.0
+python-dotenv>=1.0.0
+

@@ -1,0 +1,31 @@
+[project]
+name = "databento-mcp"
+version = "0.1.0"
+description = "MCP server for accessing Databento market data API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "databento>=0.38.0",
+    "mcp>=0.9.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_backend"
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
