@@ -312,6 +312,134 @@ Get the available date range for a dataset.
 }
 ```
 
+### 16. read_dbn_file
+
+Read and parse a DBN file, returning the records as structured data.
+
+**Parameters:**
+- `file_path`: Path to the DBN file (can be .dbn or .dbn.zst for zstd-compressed)
+- `limit`: Maximum number of records to return (default: 1000)
+- `offset`: Number of records to skip (default: 0)
+
+**Example:**
+```json
+{
+  "file_path": "./data/trades.dbn.zst",
+  "limit": 100,
+  "offset": 0
+}
+```
+
+### 17. get_dbn_metadata
+
+Get only the metadata from a DBN file without reading all records.
+
+**Parameters:**
+- `file_path`: Path to the DBN file
+
+**Example:**
+```json
+{
+  "file_path": "./data/trades.dbn.zst"
+}
+```
+
+### 18. write_dbn_file
+
+Write historical data query results directly to a DBN file.
+
+**Parameters:**
+- `dataset`: Dataset name (e.g., "GLBX.MDP3")
+- `symbols`: Comma-separated list of symbols
+- `schema`: Data schema (e.g., "trades", "ohlcv-1m")
+- `start`: Start date (YYYY-MM-DD or ISO 8601)
+- `end`: End date (YYYY-MM-DD or ISO 8601)
+- `output_path`: Path for output file
+- `compression`: Compression type (default: "zstd", options: "none", "zstd")
+
+**Example:**
+```json
+{
+  "dataset": "GLBX.MDP3",
+  "symbols": "ES.c.0",
+  "schema": "trades",
+  "start": "2024-01-01",
+  "end": "2024-01-02",
+  "output_path": "./data/es_trades.dbn.zst",
+  "compression": "zstd"
+}
+```
+
+### 19. convert_dbn_to_parquet
+
+Convert a DBN file to Parquet format.
+
+**Parameters:**
+- `input_path`: Path to the input DBN file
+- `output_path`: Path for output Parquet file (optional, defaults to input_path with .parquet extension)
+- `compression`: Parquet compression (default: "snappy", options: "snappy", "gzip", "zstd", "none")
+
+**Example:**
+```json
+{
+  "input_path": "./data/trades.dbn.zst",
+  "output_path": "./data/trades.parquet",
+  "compression": "snappy"
+}
+```
+
+### 20. export_to_parquet
+
+Query historical data and export directly to Parquet format.
+
+**Parameters:**
+- `dataset`: Dataset name (e.g., "GLBX.MDP3")
+- `symbols`: Comma-separated list of symbols
+- `schema`: Data schema (e.g., "trades", "ohlcv-1m")
+- `start`: Start date (YYYY-MM-DD or ISO 8601)
+- `end`: End date (YYYY-MM-DD or ISO 8601)
+- `output_path`: Path for output Parquet file
+- `compression`: Parquet compression (default: "snappy", options: "snappy", "gzip", "zstd", "none")
+
+**Example:**
+```json
+{
+  "dataset": "GLBX.MDP3",
+  "symbols": "ES.c.0",
+  "schema": "ohlcv-1h",
+  "start": "2024-01-01",
+  "end": "2024-01-31",
+  "output_path": "./data/es_hourly.parquet",
+  "compression": "snappy"
+}
+```
+
+### 21. read_parquet_file
+
+Read a Parquet file and return the data.
+
+**Parameters:**
+- `file_path`: Path to the Parquet file
+- `limit`: Maximum number of records to return (default: 1000)
+- `columns`: Comma-separated list of columns to read (optional, reads all if not specified)
+
+**Example - Read all columns:**
+```json
+{
+  "file_path": "./data/trades.parquet",
+  "limit": 50
+}
+```
+
+**Example - Read specific columns:**
+```json
+{
+  "file_path": "./data/trades.parquet",
+  "limit": 100,
+  "columns": "ts_event,price,size"
+}
+```
+
 ## Common Datasets
 
 - **GLBX.MDP3**: CME Globex MDP 3.0 (futures and options)
@@ -384,6 +512,35 @@ Use the standard MCP stdio protocol to connect to the server. The server communi
 6. **Use get_cost** before executing large queries to estimate costs
 7. **Use batch jobs** for large historical data downloads
 8. **Check session info** to understand market hours context
+9. **Use DBN files** for efficient storage and later processing
+10. **Use Parquet export** for compatibility with data analysis tools
+
+## File Path Security
+
+The server implements path validation to prevent directory traversal attacks:
+
+- Paths containing `..` are rejected
+- Set `DATABENTO_DATA_DIR` environment variable to restrict file operations to a specific directory
+
+**Example - Configure data directory:**
+```bash
+# Set allowed data directory
+export DATABENTO_DATA_DIR="/home/user/market-data"
+
+# Or in Claude Desktop config:
+{
+  "mcpServers": {
+    "databento": {
+      "command": "python",
+      "args": ["server.py"],
+      "env": {
+        "DATABENTO_API_KEY": "your_api_key_here",
+        "DATABENTO_DATA_DIR": "/home/user/market-data"
+      }
+    }
+  }
+}
+```
 
 ## Troubleshooting
 
@@ -406,6 +563,26 @@ Use the standard MCP stdio protocol to connect to the server. The server communi
 - Verify all required parameters are provided
 - Check that symbols exist in the dataset
 - Ensure start and end dates are valid
+
+### "File not found" (DBN/Parquet operations)
+- Verify the file path is correct
+- Check that the file exists
+- If DATABENTO_DATA_DIR is set, ensure the file is within that directory
+
+### "Invalid path" or "Directory traversal not allowed"
+- Remove any `..` from your file paths
+- Use absolute paths or paths relative to current directory
+- If DATABENTO_DATA_DIR is set, ensure paths are within that directory
+
+### "Error reading DBN file"
+- Verify the file is a valid DBN file (.dbn or .dbn.zst)
+- Check that the file is not corrupted
+- Ensure you have read permissions for the file
+
+### "Error converting DBN to Parquet"
+- Verify the input DBN file is valid
+- Check that you have write permissions for the output directory
+- Ensure there is enough disk space for the output file
 
 ## Additional Resources
 

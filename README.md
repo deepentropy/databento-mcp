@@ -14,6 +14,8 @@ A Model Context Protocol (MCP) server for accessing Databento's financial market
 ✅ **Batch Job Management** - Submit and manage large-scale batch data downloads  
 ✅ **Session Detection** - Identify current trading session (Asian, London, NY)  
 ✅ **Enhanced Metadata** - List publishers, fields, and dataset ranges  
+✅ **DBN File Processing** - Read, write, and parse DBN format files  
+✅ **Parquet Export** - Convert data to Apache Parquet format  
 ✅ **Smart Caching** - File-based cache with automatic expiration to reduce API calls  
 ✅ **MCP Compatible** - Works with Claude Desktop and other MCP clients  
 
@@ -212,6 +214,101 @@ Get the available date range for a dataset
 - Dataset name
 - Start date (earliest available data)
 - End date (latest available data, or "ongoing" if active)
+
+### 🔹 read_dbn_file
+Read and parse a DBN file, returning the records as structured data
+
+**Parameters:**
+- `file_path` - Path to the DBN file (can be .dbn or .dbn.zst for zstd-compressed)
+- `limit` - Maximum number of records to return (default: 1000)
+- `offset` - Number of records to skip (default: 0)
+
+**Returns:**
+- File metadata (version, dataset, schema, timestamps, symbol count)
+- Record count
+- Parsed records up to limit
+
+### 🔹 get_dbn_metadata
+Get only the metadata from a DBN file without reading all records
+
+**Parameters:**
+- `file_path` - Path to the DBN file
+
+**Returns:**
+- Version, dataset, schema
+- Start and end timestamps
+- Symbols list
+- Symbology mappings (if present)
+
+### 🔹 write_dbn_file
+Write historical data query results directly to a DBN file
+
+**Parameters:**
+- `dataset` - Dataset name (e.g., "GLBX.MDP3")
+- `symbols` - Comma-separated list of symbols
+- `schema` - Data schema (e.g., "trades", "ohlcv-1m")
+- `start` - Start date (YYYY-MM-DD or ISO 8601)
+- `end` - End date (YYYY-MM-DD or ISO 8601)
+- `output_path` - Path for output file
+- `compression` - Compression type (optional: "none", "zstd", default: "zstd")
+
+**Returns:**
+- File path written
+- File size in bytes
+- Record count
+- Schema and compression used
+
+### 🔹 convert_dbn_to_parquet
+Convert a DBN file to Parquet format
+
+**Parameters:**
+- `input_path` - Path to the input DBN file
+- `output_path` - Path for output Parquet file (optional, defaults to input_path with .parquet extension)
+- `compression` - Parquet compression (optional: "snappy", "gzip", "zstd", "none", default: "snappy")
+
+**Returns:**
+- Input and output file paths
+- Input and output file sizes
+- Record count
+- Columns written
+
+### 🔹 export_to_parquet
+Query historical data and export directly to Parquet format
+
+**Parameters:**
+- `dataset` - Dataset name (e.g., "GLBX.MDP3")
+- `symbols` - Comma-separated list of symbols
+- `schema` - Data schema (e.g., "trades", "ohlcv-1m")
+- `start` - Start date (YYYY-MM-DD or ISO 8601)
+- `end` - End date (YYYY-MM-DD or ISO 8601)
+- `output_path` - Path for output Parquet file
+- `compression` - Parquet compression (optional: "snappy", "gzip", "zstd", "none", default: "snappy")
+
+**Returns:**
+- Output file path
+- File size in bytes
+- Record count
+- Columns written
+
+### 🔹 read_parquet_file
+Read a Parquet file and return the data
+
+**Parameters:**
+- `file_path` - Path to the Parquet file
+- `limit` - Maximum number of records to return (default: 1000)
+- `columns` - Comma-separated list of columns to read (optional, reads all if not specified)
+
+**Returns:**
+- Schema/columns information
+- Record count (total in file)
+- Records (up to limit)
+- File metadata
+
+## File Path Security
+
+The server implements path validation to prevent directory traversal attacks:
+- Paths containing `..` are rejected
+- Set `DATABENTO_DATA_DIR` environment variable to restrict file operations to a specific directory
 
 ## Documentation
 
