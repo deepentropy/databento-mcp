@@ -3,6 +3,7 @@ import os
 import sys
 import asyncio
 import json
+import time
 from typing import Any
 
 import databento as db
@@ -546,12 +547,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Collect records for the specified duration
             records = []
-            start_time = asyncio.get_event_loop().time()
+            start_time = time.time()
 
             # Use iteration with timeout
             for record in live_client:
                 records.append(record)
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = time.time() - start_time
                 if elapsed >= duration:
                     break
 
@@ -661,7 +662,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 status = "none"
 
             result += f"\nResolution status: {status}\n"
-            result += f"Symbols resolved: {min(resolved_count, total_count)}/{total_count}\n"
+            result += f"Symbols resolved: {resolved_count}/{total_count}\n"
 
             # Cache the result
             cache.set(cache_key, result, ttl=3600)  # 1 hour TTL
