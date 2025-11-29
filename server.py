@@ -61,15 +61,11 @@ def validate_file_path(file_path: str, must_exist: bool = False) -> Path:
     # Convert to Path object
     path = Path(file_path)
     
-    # Resolve to absolute path
+    # Resolve to absolute path (follows symlinks)
     try:
         resolved_path = path.resolve()
     except (OSError, ValueError) as e:
         raise ValueError(f"Invalid file path: {e}")
-    
-    # Check for directory traversal attempts
-    if ".." in str(file_path):
-        raise ValueError("Directory traversal (..) not allowed in file paths")
     
     # If DATABENTO_DATA_DIR is set, enforce it
     if ALLOWED_DATA_DIR:
@@ -80,6 +76,17 @@ def validate_file_path(file_path: str, must_exist: bool = False) -> Path:
             raise ValueError(
                 f"File path must be within DATABENTO_DATA_DIR: {allowed_dir}"
             )
+    else:
+        # Without DATABENTO_DATA_DIR, ensure path doesn't escape current working directory
+        # by checking that resolved path is within cwd or an absolute path was given
+        cwd = Path.cwd().resolve()
+        try:
+            # Check if resolved path is within current directory
+            resolved_path.relative_to(cwd)
+        except ValueError:
+            # Allow absolute paths that don't try to traverse
+            if ".." in str(file_path):
+                raise ValueError("Directory traversal (..) not allowed in file paths")
     
     # Check existence if required
     if must_exist and not resolved_path.exists():
@@ -1486,17 +1493,18 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         compression = arguments.get("compression", "zstd")
 
         try:
-            # Validate output path
-            resolved_path = validate_file_path(output_path, must_exist=False)
-
-            # Ensure correct file extension
-            if compression == "zstd" and not str(resolved_path).endswith(".dbn.zst"):
-                if str(resolved_path).endswith(".dbn"):
-                    resolved_path = Path(str(resolved_path) + ".zst")
-                elif not str(resolved_path).endswith(".dbn.zst"):
-                    resolved_path = Path(str(resolved_path) + ".dbn.zst")
-            elif compression == "none" and not str(resolved_path).endswith(".dbn"):
-                resolved_path = Path(str(resolved_path) + ".dbn")
+            # Determine final path with correct extension
+            final_path = output_path
+            if compression == "zstd" and not output_path.endswith(".dbn.zst"):
+                if output_path.endswith(".dbn"):
+                    final_path = output_path + ".zst"
+                else:
+                    final_path = output_path + ".dbn.zst"
+            elif compression == "none" and not output_path.endswith(".dbn"):
+                final_path = output_path + ".dbn"
+            
+            # Validate the final output path
+            resolved_path = validate_file_path(final_path, must_exist=False)
 
             # Query data and write to file
             data = client.timeseries.get_range(
@@ -1554,7 +1562,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     output_str = input_str[:-4] + ".parquet"
                 else:
                     output_str = input_str + ".parquet"
-                resolved_output = Path(output_str)
+                # Validate the auto-generated output path
+                resolved_output = validate_file_path(output_str, must_exist=False)
 
             # Get input file size
             input_size = resolved_input.stat().st_size
@@ -1609,12 +1618,13 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         compression = arguments.get("compression", "snappy")
 
         try:
-            # Validate output path
-            resolved_path = validate_file_path(output_path, must_exist=False)
-
-            # Ensure .parquet extension
-            if not str(resolved_path).endswith(".parquet"):
-                resolved_path = Path(str(resolved_path) + ".parquet")
+            # Determine final path with correct extension
+            final_path = output_path
+            if not output_path.endswith(".parquet"):
+                final_path = output_path + ".parquet"
+            
+            # Validate the final output path
+            resolved_path = validate_file_path(final_path, must_exist=False)
 
             # Query data
             data = client.timeseries.get_range(
