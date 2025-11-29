@@ -4,6 +4,7 @@ import sys
 import asyncio
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import databento as db
@@ -258,6 +259,154 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["dataset", "symbols", "stype_in", "stype_out", "start"]
             }
+        ),
+        # Batch Job Management Tools
+        Tool(
+            name="submit_batch_job",
+            description="Submit a batch data download job for large historical datasets",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (e.g., 'GLBX.MDP3')"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (e.g., 'trades', 'ohlcv-1m')"
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD or ISO 8601)"
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD or ISO 8601)"
+                    },
+                    "encoding": {
+                        "type": "string",
+                        "description": "Output encoding (default: 'dbn')",
+                        "enum": ["dbn", "csv", "json"],
+                        "default": "dbn"
+                    },
+                    "compression": {
+                        "type": "string",
+                        "description": "Compression type (default: 'zstd')",
+                        "enum": ["none", "zstd"],
+                        "default": "zstd"
+                    },
+                    "split_duration": {
+                        "type": "string",
+                        "description": "Split files by duration (default: 'day')",
+                        "enum": ["day", "week", "month", "none"],
+                        "default": "day"
+                    }
+                },
+                "required": ["dataset", "symbols", "schema", "start", "end"]
+            }
+        ),
+        Tool(
+            name="list_batch_jobs",
+            description="List all batch jobs with their current status",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "states": {
+                        "type": "string",
+                        "description": "Filter by states (comma-separated: 'received', 'queued', 'processing', 'done', 'expired')",
+                        "default": "queued,processing,done"
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "Only show jobs since this date (ISO 8601)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of jobs to return (default: 20)",
+                        "default": 20
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="get_batch_job_files",
+            description="Get download information for a completed batch job",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The batch job ID"
+                    }
+                },
+                "required": ["job_id"]
+            }
+        ),
+        # Session Detection Tool
+        Tool(
+            name="get_session_info",
+            description="Identify the current trading session based on time",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timestamp": {
+                        "type": "string",
+                        "description": "ISO 8601 timestamp (optional, defaults to current time)"
+                    }
+                }
+            }
+        ),
+        # Enhanced Metadata Tools
+        Tool(
+            name="list_publishers",
+            description="List data publishers with their details",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Filter by dataset (optional)"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="list_fields",
+            description="List fields available for a specific schema",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Schema name (e.g., 'trades', 'mbp-1')"
+                    },
+                    "encoding": {
+                        "type": "string",
+                        "description": "Encoding format (default: 'json')",
+                        "enum": ["dbn", "csv", "json"],
+                        "default": "json"
+                    }
+                },
+                "required": ["schema"]
+            }
+        ),
+        Tool(
+            name="get_dataset_range",
+            description="Get the available date range for a dataset",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name"
+                    }
+                },
+                "required": ["dataset"]
+            }
         )
     ]
 
@@ -405,7 +554,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             if count == 0:
                 result = "No instruments found matching the criteria."
             elif count == 50:
-                result += f"\n(Showing first 50 results)"
+                result += "\n(Showing first 50 results)"
 
             # Cache the result
             cache.set(cache_key, result, ttl=7200)  # 2 hour TTL
@@ -671,6 +820,333 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         except Exception as e:
             return [TextContent(type="text", text=f"Error resolving symbols: {str(e)}")]
+
+    elif name == "submit_batch_job":
+        dataset = arguments["dataset"]
+        symbols = arguments["symbols"].split(",")
+        symbols = [s.strip() for s in symbols]
+        schema = arguments["schema"]
+        start = arguments["start"]
+        end = arguments["end"]
+        encoding = arguments.get("encoding", "dbn")
+        compression = arguments.get("compression", "zstd")
+        split_duration = arguments.get("split_duration", "day")
+
+        try:
+            # Submit batch job
+            job_info = client.batch.submit_job(
+                dataset=dataset,
+                symbols=symbols,
+                schema=schema,
+                start=start,
+                end=end,
+                encoding=encoding,
+                compression=compression,
+                split_duration=split_duration
+            )
+
+            # Format response
+            result = "Batch Job Submitted:\n"
+            result += f"Job ID: {job_info.get('job_id', 'N/A')}\n"
+            result += f"State: {job_info.get('state', 'N/A')}\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Schema: {schema}\n"
+            result += f"Symbols: {', '.join(symbols)}\n"
+            result += f"Period: {start} to {end}\n"
+            result += f"Encoding: {encoding}\n"
+            result += f"Compression: {compression}\n"
+            result += f"Split Duration: {split_duration}\n"
+
+            # Include cost if available
+            if "cost_usd" in job_info:
+                result += f"\nEstimated Cost: ${job_info['cost_usd']:.4f} USD\n"
+            if "ts_received" in job_info:
+                result += f"Submitted: {job_info['ts_received']}\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error submitting batch job: {str(e)}")]
+
+    elif name == "list_batch_jobs":
+        states = arguments.get("states", "queued,processing,done")
+        since = arguments.get("since")
+        limit = arguments.get("limit", 20)
+
+        # Create cache key
+        cache_key = f"batch_jobs:{states}:{since}:{limit}"
+
+        # Check cache with short TTL (batch job status changes frequently)
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Batch jobs:\n\n{cached_data}"
+            )]
+
+        try:
+            # Parse states
+            state_list = [s.strip() for s in states.split(",")]
+
+            # List batch jobs
+            jobs = client.batch.list_jobs(states=state_list, since=since)
+
+            # Limit results
+            jobs = jobs[:limit]
+
+            # Group jobs by state
+            jobs_by_state = {}
+            for job in jobs:
+                state = job.get("state", "unknown")
+                if state not in jobs_by_state:
+                    jobs_by_state[state] = []
+                jobs_by_state[state].append(job)
+
+            # Format response
+            result = f"Batch Jobs ({len(jobs)} total):\n\n"
+
+            for state, state_jobs in jobs_by_state.items():
+                result += f"=== {state.upper()} ({len(state_jobs)}) ===\n"
+                for job in state_jobs:
+                    result += f"  Job ID: {job.get('job_id', 'N/A')}\n"
+                    result += f"    Dataset: {job.get('dataset', 'N/A')}\n"
+                    result += f"    Schema: {job.get('schema', 'N/A')}\n"
+                    if "cost_usd" in job:
+                        result += f"    Cost: ${job['cost_usd']:.4f} USD\n"
+                    if "ts_received" in job:
+                        result += f"    Submitted: {job['ts_received']}\n"
+                    if "ts_process_start" in job:
+                        result += f"    Processing Started: {job['ts_process_start']}\n"
+                    if "ts_process_done" in job:
+                        result += f"    Completed: {job['ts_process_done']}\n"
+                    result += "\n"
+
+            if len(jobs) == 0:
+                result = "No batch jobs found matching the criteria."
+
+            # Cache with short TTL (5 minutes)
+            cache.set(cache_key, result, ttl=300)
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error listing batch jobs: {str(e)}")]
+
+    elif name == "get_batch_job_files":
+        job_id = arguments["job_id"]
+
+        # Create cache key
+        cache_key = f"batch_files:{job_id}"
+
+        # Check cache with short TTL
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Batch job files:\n\n{cached_data}"
+            )]
+
+        try:
+            # Get file list for job
+            files = client.batch.list_files(job_id=job_id)
+
+            # Format response
+            result = f"Batch Job Files for {job_id}:\n\n"
+
+            if not files:
+                result += "No files available yet. The job may still be processing.\n"
+            else:
+                total_size = 0
+                for i, file_info in enumerate(files, 1):
+                    result += f"File {i}:\n"
+                    result += f"  Filename: {file_info.get('filename', 'N/A')}\n"
+                    size = file_info.get('size', 0)
+                    total_size += size
+                    result += f"  Size: {size:,} bytes ({size / (1024*1024):.2f} MB)\n"
+                    if "hash" in file_info:
+                        result += f"  Hash: {file_info['hash']}\n"
+                    if "urls" in file_info:
+                        urls = file_info["urls"]
+                        if isinstance(urls, dict) and "https" in urls:
+                            result += f"  Download URL: {urls['https']}\n"
+                        elif isinstance(urls, str):
+                            result += f"  Download URL: {urls}\n"
+                    if "ts_expiration" in file_info:
+                        result += f"  Expires: {file_info['ts_expiration']}\n"
+                    result += "\n"
+
+                result += f"Total Files: {len(files)}\n"
+                result += f"Total Size: {total_size:,} bytes ({total_size / (1024*1024):.2f} MB)\n"
+
+            # Cache with short TTL (5 minutes)
+            cache.set(cache_key, result, ttl=300)
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error getting batch job files: {str(e)}")]
+
+    elif name == "get_session_info":
+        timestamp_str = arguments.get("timestamp")
+
+        try:
+            # Parse timestamp or use current time
+            if timestamp_str:
+                ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            else:
+                ts = datetime.now(timezone.utc)
+
+            # Get UTC hour
+            utc_hour = ts.hour
+
+            # Determine trading session
+            if 0 <= utc_hour < 7:
+                session_name = "Asian"
+                session_start = "00:00 UTC"
+                session_end = "07:00 UTC"
+            elif 7 <= utc_hour < 14:
+                session_name = "London"
+                session_start = "07:00 UTC"
+                session_end = "14:00 UTC"
+            elif 14 <= utc_hour < 22:
+                session_name = "NY"
+                session_start = "14:00 UTC"
+                session_end = "22:00 UTC"
+            else:
+                session_name = "Off-hours"
+                session_start = "22:00 UTC"
+                session_end = "00:00 UTC"
+
+            # Format response
+            result = "Trading Session Info:\n\n"
+            result += f"Current Session: {session_name}\n"
+            result += f"Session Start: {session_start}\n"
+            result += f"Session End: {session_end}\n"
+            result += f"Current Timestamp: {ts.isoformat()}\n"
+            result += f"UTC Hour: {utc_hour}\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error determining session info: {str(e)}")]
+
+    elif name == "list_publishers":
+        dataset_filter = arguments.get("dataset")
+
+        # Create cache key
+        cache_key = f"publishers:{dataset_filter}"
+
+        # Check cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Publishers:\n\n{cached_data}"
+            )]
+
+        try:
+            # Get publishers
+            publishers = client.metadata.list_publishers()
+
+            # Filter by dataset if specified
+            if dataset_filter:
+                publishers = [p for p in publishers if p.get("dataset") == dataset_filter]
+
+            # Format response
+            result = f"Data Publishers ({len(publishers)} total):\n\n"
+
+            for pub in publishers:
+                result += f"Publisher ID: {pub.get('publisher_id', 'N/A')}\n"
+                result += f"  Dataset: {pub.get('dataset', 'N/A')}\n"
+                result += f"  Venue: {pub.get('venue', 'N/A')}\n"
+                if "description" in pub:
+                    result += f"  Description: {pub['description']}\n"
+                result += "\n"
+
+            if len(publishers) == 0:
+                result = "No publishers found matching the criteria."
+
+            # Cache for 24 hours (publishers rarely change)
+            cache.set(cache_key, result, ttl=86400)
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error listing publishers: {str(e)}")]
+
+    elif name == "list_fields":
+        schema = arguments["schema"]
+        encoding = arguments.get("encoding", "json")
+
+        # Create cache key
+        cache_key = f"fields:{schema}:{encoding}"
+
+        # Check cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Fields:\n\n{cached_data}"
+            )]
+
+        try:
+            # Get fields
+            fields = client.metadata.list_fields(schema=schema, encoding=encoding)
+
+            # Format response
+            result = f"Fields for schema '{schema}' (encoding: {encoding}):\n\n"
+
+            for field in fields:
+                result += f"{field.get('name', 'N/A')}\n"
+                result += f"  Type: {field.get('type', 'N/A')}\n"
+                if "description" in field:
+                    result += f"  Description: {field['description']}\n"
+                result += "\n"
+
+            if len(fields) == 0:
+                result = "No fields found for the specified schema."
+
+            # Cache for 24 hours (field definitions rarely change)
+            cache.set(cache_key, result, ttl=86400)
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error listing fields: {str(e)}")]
+
+    elif name == "get_dataset_range":
+        dataset = arguments["dataset"]
+
+        # Create cache key
+        cache_key = f"dataset_range:{dataset}"
+
+        # Check cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Dataset range:\n\n{cached_data}"
+            )]
+
+        try:
+            # Get dataset range
+            range_info = client.metadata.get_dataset_range(dataset=dataset)
+
+            # Format response
+            result = f"Dataset Range for {dataset}:\n\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Start Date: {range_info.get('start_date', 'N/A')}\n"
+            result += f"End Date: {range_info.get('end_date', 'ongoing')}\n"
+
+            # Cache for 1 hour (dataset ranges can update)
+            cache.set(cache_key, result, ttl=3600)
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error getting dataset range: {str(e)}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]

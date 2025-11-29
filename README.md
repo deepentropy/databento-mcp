@@ -11,6 +11,9 @@ A Model Context Protocol (MCP) server for accessing Databento's financial market
 ✅ **Cost Estimation** - Estimate query costs before executing  
 ✅ **Live Data Streaming** - Subscribe to real-time market data  
 ✅ **Symbology Resolution** - Resolve symbols between different symbology types  
+✅ **Batch Job Management** - Submit and manage large-scale batch data downloads  
+✅ **Session Detection** - Identify current trading session (Asian, London, NY)  
+✅ **Enhanced Metadata** - List publishers, fields, and dataset ranges  
 ✅ **Smart Caching** - File-based cache with automatic expiration to reduce API calls  
 ✅ **MCP Compatible** - Works with Claude Desktop and other MCP clients  
 
@@ -116,6 +119,99 @@ Resolve symbols between different symbology types
 - Resolved symbol mappings
 - Resolution status (full/partial)
 - Count of resolved symbols
+
+### 🔹 submit_batch_job
+Submit a batch data download job for large historical datasets
+
+**Parameters:**
+- `dataset` - Dataset name (e.g., "GLBX.MDP3")
+- `symbols` - Comma-separated list of symbols
+- `schema` - Data schema (e.g., "trades", "ohlcv-1m")
+- `start` - Start date (YYYY-MM-DD or ISO 8601)
+- `end` - End date (YYYY-MM-DD or ISO 8601)
+- `encoding` - Output encoding (optional: "dbn", "csv", "json", default: "dbn")
+- `compression` - Compression type (optional: "none", "zstd", default: "zstd")
+- `split_duration` - Split files by duration (optional: "day", "week", "month", "none")
+
+**Returns:**
+- Job ID
+- Job state (received, queued, processing, done)
+- Estimated cost in USD
+- Submission timestamp
+
+### 🔹 list_batch_jobs
+List all batch jobs with their current status
+
+**Parameters:**
+- `states` - Filter by states (optional, comma-separated: "received", "queued", "processing", "done", "expired")
+- `since` - Only show jobs since this date (optional, ISO 8601)
+- `limit` - Maximum number of jobs to return (optional, default: 20)
+
+**Returns:**
+- List of jobs with ID, state, dataset, schema, cost, timestamps
+- Total job count
+- Jobs grouped by state
+
+### 🔹 get_batch_job_files
+Get download information for a completed batch job
+
+**Parameters:**
+- `job_id` - The batch job ID
+
+**Returns:**
+- Job state
+- List of files with filename, size, hash, download URL
+- Total size
+- Expiration date
+
+### 🔹 get_session_info
+Identify the current trading session based on time
+
+**Parameters:**
+- `timestamp` - ISO 8601 timestamp (optional, defaults to current time)
+
+**Returns:**
+- Current session name (Asian, London, NY, Off-hours)
+- Session start time (UTC)
+- Session end time (UTC)
+- Current timestamp
+- UTC hour
+
+**Session Definitions:**
+- **Asian**: 00:00 - 07:00 UTC
+- **London**: 07:00 - 14:00 UTC
+- **NY**: 14:00 - 22:00 UTC
+- **Off-hours**: 22:00 - 00:00 UTC
+
+### 🔹 list_publishers
+List data publishers with their details
+
+**Parameters:**
+- `dataset` - Filter by dataset (optional)
+
+**Returns:**
+- List of publishers with publisher_id, dataset, venue, description
+
+### 🔹 list_fields
+List fields available for a specific schema
+
+**Parameters:**
+- `schema` - Schema name (e.g., "trades", "mbp-1")
+- `encoding` - Encoding format (optional: "dbn", "csv", "json", default: "json")
+
+**Returns:**
+- List of fields with name, type, description
+
+### 🔹 get_dataset_range
+Get the available date range for a dataset
+
+**Parameters:**
+- `dataset` - Dataset name
+
+**Returns:**
+- Dataset name
+- Start date (earliest available data)
+- End date (latest available data, or "ongoing" if active)
 
 ## Documentation
 
