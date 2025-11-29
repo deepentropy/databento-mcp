@@ -42,6 +42,47 @@ app = Server("databento-mcp")
 # Get allowed data directory from environment variable
 ALLOWED_DATA_DIR = os.getenv("DATABENTO_DATA_DIR")
 
+# Display limits for output
+MAX_SYMBOLS_DISPLAY = 50
+MAX_MAPPINGS_DISPLAY = 20
+
+
+def ensure_dbn_extension(path: str, compression: str) -> str:
+    """
+    Ensure the path has the correct DBN file extension based on compression.
+    
+    Args:
+        path: The file path
+        compression: Compression type ("zstd" or "none")
+        
+    Returns:
+        Path with correct extension
+    """
+    if compression == "zstd":
+        if path.endswith(".dbn"):
+            return path + ".zst"
+        elif not path.endswith(".dbn.zst"):
+            return path + ".dbn.zst"
+    elif compression == "none":
+        if not path.endswith(".dbn"):
+            return path + ".dbn"
+    return path
+
+
+def ensure_parquet_extension(path: str) -> str:
+    """
+    Ensure the path has the .parquet extension.
+    
+    Args:
+        path: The file path
+        
+    Returns:
+        Path with .parquet extension
+    """
+    if not path.endswith(".parquet"):
+        return path + ".parquet"
+    return path
+
 
 def validate_file_path(file_path: str, must_exist: bool = False) -> Path:
     """
@@ -1456,10 +1497,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # Get symbols if available
             if hasattr(metadata, 'symbols') and metadata.symbols:
                 result += f"\nSymbols:\n"
-                for symbol in metadata.symbols[:50]:  # Limit to first 50
+                for symbol in metadata.symbols[:MAX_SYMBOLS_DISPLAY]:
                     result += f"  - {symbol}\n"
-                if len(metadata.symbols) > 50:
-                    result += f"  ... and {len(metadata.symbols) - 50} more\n"
+                if len(metadata.symbols) > MAX_SYMBOLS_DISPLAY:
+                    result += f"  ... and {len(metadata.symbols) - MAX_SYMBOLS_DISPLAY} more\n"
 
             # Get mappings if available
             if hasattr(store, 'symbology') and store.symbology:
@@ -1467,7 +1508,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 mappings = store.symbology
                 count = 0
                 for key, value in mappings.items():
-                    if count >= 20:  # Limit output
+                    if count >= MAX_MAPPINGS_DISPLAY:
                         result += f"  ... and more mappings\n"
                         break
                     result += f"  {key}: {value}\n"
@@ -1493,15 +1534,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         compression = arguments.get("compression", "zstd")
 
         try:
-            # Determine final path with correct extension
-            final_path = output_path
-            if compression == "zstd" and not output_path.endswith(".dbn.zst"):
-                if output_path.endswith(".dbn"):
-                    final_path = output_path + ".zst"
-                else:
-                    final_path = output_path + ".dbn.zst"
-            elif compression == "none" and not output_path.endswith(".dbn"):
-                final_path = output_path + ".dbn"
+            # Determine final path with correct extension using helper function
+            final_path = ensure_dbn_extension(output_path, compression)
             
             # Validate the final output path
             resolved_path = validate_file_path(final_path, must_exist=False)
@@ -1618,10 +1652,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         compression = arguments.get("compression", "snappy")
 
         try:
-            # Determine final path with correct extension
-            final_path = output_path
-            if not output_path.endswith(".parquet"):
-                final_path = output_path + ".parquet"
+            # Determine final path with correct extension using helper function
+            final_path = ensure_parquet_extension(output_path)
             
             # Validate the final output path
             resolved_path = validate_file_path(final_path, must_exist=False)
