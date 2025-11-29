@@ -162,6 +162,101 @@ async def list_tools() -> list[Tool]:
                     }
                 }
             }
+        ),
+        Tool(
+            name="get_cost",
+            description="Estimate the cost of a historical data query before executing it",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (e.g., 'GLBX.MDP3', 'XNAS.ITCH')"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (e.g., 'trades', 'ohlcv-1m', 'mbp-1')",
+                        "default": "trades"
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD or ISO 8601 datetime)"
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD or ISO 8601 datetime)"
+                    }
+                },
+                "required": ["dataset", "symbols", "schema", "start", "end"]
+            }
+        ),
+        Tool(
+            name="get_live_data",
+            description="Subscribe to real-time market data for a limited duration",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (e.g., 'GLBX.MDP3')"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (e.g., 'trades', 'mbp-1', 'ohlcv-1s')",
+                        "default": "trades"
+                    },
+                    "duration": {
+                        "type": "integer",
+                        "description": "How long to stream data in seconds (default: 10, max: 60)",
+                        "default": 10
+                    }
+                },
+                "required": ["dataset", "symbols"]
+            }
+        ),
+        Tool(
+            name="resolve_symbols",
+            description="Resolve symbols between different symbology types",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols to resolve"
+                    },
+                    "stype_in": {
+                        "type": "string",
+                        "description": "Input symbol type (e.g., 'raw_symbol', 'instrument_id', 'continuous', 'parent')",
+                        "default": "raw_symbol"
+                    },
+                    "stype_out": {
+                        "type": "string",
+                        "description": "Output symbol type (e.g., 'instrument_id', 'raw_symbol')",
+                        "default": "instrument_id"
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start date for resolution (YYYY-MM-DD)"
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End date for resolution (YYYY-MM-DD, optional)"
+                    }
+                },
+                "required": ["dataset", "symbols", "stype_in", "stype_out", "start"]
+            }
         )
     ]
 
@@ -360,6 +455,221 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text="All cache entries cleared successfully.")]
         except Exception as e:
             return [TextContent(type="text", text=f"Error clearing cache: {str(e)}")]
+
+    elif name == "get_cost":
+        dataset = arguments["dataset"]
+        symbols = arguments["symbols"].split(",")
+        symbols = [s.strip() for s in symbols]
+        schema = arguments.get("schema", "trades")
+        start = arguments["start"]
+        end = arguments["end"]
+
+        # Create cache key
+        cache_key = f"cost:{dataset}:{','.join(sorted(symbols))}:{schema}:{start}:{end}"
+
+        # Check cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Cost estimate:\n\n{cached_data}"
+            )]
+
+        try:
+            # Get cost estimate
+            cost = client.metadata.get_cost(
+                dataset=dataset,
+                symbols=symbols,
+                schema=schema,
+                start=start,
+                end=end
+            )
+
+            # Get record count
+            record_count = client.metadata.get_record_count(
+                dataset=dataset,
+                symbols=symbols,
+                schema=schema,
+                start=start,
+                end=end
+            )
+
+            # Get billable size
+            billable_size = client.metadata.get_billable_size(
+                dataset=dataset,
+                symbols=symbols,
+                schema=schema,
+                start=start,
+                end=end
+            )
+
+            # Format response
+            result = f"Cost Estimate for {', '.join(symbols)}:\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Schema: {schema}\n"
+            result += f"Period: {start} to {end}\n\n"
+            result += f"Estimated Cost: ${cost:.4f} USD\n"
+            result += f"Estimated Records: {record_count:,}\n"
+            result += f"Estimated Size: {billable_size:,} bytes ({billable_size / (1024*1024):.2f} MB)\n"
+
+            # Cache the result (shorter TTL as prices may change)
+            cache.set(cache_key, result, ttl=1800)  # 30 minute TTL
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error estimating cost: {str(e)}")]
+
+    elif name == "get_live_data":
+        dataset = arguments["dataset"]
+        symbols = arguments["symbols"].split(",")
+        symbols = [s.strip() for s in symbols]
+        schema = arguments.get("schema", "trades")
+        duration = arguments.get("duration", 10)
+
+        # Validate duration (max 60 seconds to prevent long-running calls)
+        if duration < 1:
+            return [TextContent(type="text", text="Error: duration must be at least 1 second")]
+        if duration > 60:
+            return [TextContent(type="text", text="Error: duration cannot exceed 60 seconds")]
+
+        try:
+            # Create Live client
+            live_client = db.Live(key=api_key)
+
+            # Subscribe to data
+            live_client.subscribe(
+                dataset=dataset,
+                schema=schema,
+                symbols=symbols,
+            )
+
+            # Collect records for the specified duration
+            records = []
+            start_time = asyncio.get_event_loop().time()
+
+            # Use iteration with timeout
+            for record in live_client:
+                records.append(record)
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= duration:
+                    break
+
+            # Stop and cleanup
+            live_client.stop()
+
+            # Format response
+            result = f"Live Data for {', '.join(symbols)}:\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Schema: {schema}\n"
+            result += f"Duration: {duration} seconds\n"
+            result += f"Records received: {len(records)}\n\n"
+
+            if records:
+                result += "Sample records (first 10):\n"
+                for i, record in enumerate(records[:10]):
+                    result += f"  {i + 1}. {type(record).__name__}: "
+                    if hasattr(record, "ts_event"):
+                        result += f"ts_event={record.ts_event} "
+                    if hasattr(record, "price"):
+                        result += f"price={record.price} "
+                    if hasattr(record, "size"):
+                        result += f"size={record.size} "
+                    if hasattr(record, "symbol"):
+                        result += f"symbol={record.symbol} "
+                    result += "\n"
+            else:
+                result += "No records received during the streaming period.\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error streaming live data: {str(e)}")]
+
+    elif name == "resolve_symbols":
+        dataset = arguments["dataset"]
+        symbols = arguments["symbols"].split(",")
+        symbols = [s.strip() for s in symbols]
+        stype_in = arguments.get("stype_in", "raw_symbol")
+        stype_out = arguments.get("stype_out", "instrument_id")
+        start = arguments["start"]
+        end = arguments.get("end")
+
+        # Create cache key
+        cache_key = f"resolve:{dataset}:{','.join(sorted(symbols))}:{stype_in}:{stype_out}:{start}:{end}"
+
+        # Check cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Symbol resolution:\n\n{cached_data}"
+            )]
+
+        try:
+            # Resolve symbols
+            resolution = client.symbology.resolve(
+                dataset=dataset,
+                symbols=symbols,
+                stype_in=stype_in,
+                stype_out=stype_out,
+                start_date=start,
+                end_date=end
+            )
+
+            # Format response
+            result = "Symbol Resolution:\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Input type: {stype_in}\n"
+            result += f"Output type: {stype_out}\n"
+            result += f"Period: {start}"
+            if end:
+                result += f" to {end}"
+            result += "\n\n"
+
+            # Extract mappings from response
+            mappings = resolution.get("result", {})
+            resolved_count = 0
+            total_count = len(symbols)
+
+            result += "Mappings:\n"
+            for input_symbol, mapping_data in mappings.items():
+                result += f"  {input_symbol}:\n"
+                if isinstance(mapping_data, dict):
+                    for date_range, output_symbol in mapping_data.items():
+                        result += f"    {date_range}: {output_symbol}\n"
+                        resolved_count += 1
+                elif isinstance(mapping_data, list):
+                    for item in mapping_data:
+                        if isinstance(item, dict):
+                            date_range = item.get("d", "N/A")
+                            output_symbol = item.get("s", "N/A")
+                            result += f"    {date_range}: {output_symbol}\n"
+                        else:
+                            result += f"    {item}\n"
+                        resolved_count += 1
+                else:
+                    result += f"    {mapping_data}\n"
+                    resolved_count += 1
+
+            # Determine resolution status
+            if resolved_count >= total_count:
+                status = "full"
+            elif resolved_count > 0:
+                status = "partial"
+            else:
+                status = "none"
+
+            result += f"\nResolution status: {status}\n"
+            result += f"Symbols resolved: {min(resolved_count, total_count)}/{total_count}\n"
+
+            # Cache the result
+            cache.set(cache_key, result, ttl=3600)  # 1 hour TTL
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error resolving symbols: {str(e)}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
