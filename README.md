@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/deepentropy/databento-mcp/main/logo.svg" alt="Databento MCP Logo" width="100" height="100">
+  <img src="https://raw.githubusercontent.com/deepentropy/databento-mcp/main/logo.svg" alt="Databento™ MCP Logo" width="100" height="100">
 </p>
 
-<h1 align="center">Databento MCP</h1>
+<h1 align="center">Databento™ MCP</h1>
 
 <p align="center">
-  <strong>Model Context Protocol server for Databento market data</strong>
+  <strong>Model Context Protocol server for Databento™ market data</strong>
 </p>
 
 <p align="center">
