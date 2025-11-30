@@ -228,6 +228,24 @@ class Cache:
         for cache_file in self.cache_dir.glob("*.json"):
             cache_file.unlink()
 
+    def delete(self, key: str) -> bool:
+        """
+        Delete a specific cache entry.
+
+        Args:
+            key: Cache key to delete
+
+        Returns:
+            True if the entry was deleted, False if it didn't exist
+        """
+        cache_key = self._get_cache_key(key)
+        cache_path = self._get_cache_path(cache_key)
+
+        if cache_path.exists():
+            cache_path.unlink()
+            return True
+        return False
+
     def clear_expired(self) -> None:
         """Clear expired cache entries."""
         for cache_file in self.cache_dir.glob("*.json"):
@@ -240,4 +258,5 @@ class Cache:
                     cache_file.unlink()
             except (json.JSONDecodeError, KeyError, ValueError):
                 cache_file.unlink(missing_ok=True)
+
 

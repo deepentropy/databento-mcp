@@ -13,12 +13,9 @@ class TestListSchemas:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_list_schemas_returns_all_schemas(self):
         """Test that list_schemas returns all expected schemas."""
-        # Clear cache to avoid stale data
-        cache_dir = "cache"
-        if os.path.exists(cache_dir):
-            import shutil
-            for f in os.listdir(cache_dir):
-                os.remove(os.path.join(cache_dir, f))
+        # Clear cache using public API
+        from server import cache
+        cache.clear()
 
         with patch("server.client") as mock_client:
             from server import call_tool

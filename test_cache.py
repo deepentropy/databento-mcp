@@ -197,3 +197,29 @@ class TestCache:
         # The expired entry should be gone
         # But the long TTL entry should remain
         assert temp_cache.get("long_ttl") == "value2"
+
+    def test_delete_existing_key(self, temp_cache):
+        """Test deleting an existing cache entry."""
+        temp_cache.set("key_to_delete", "value")
+        assert temp_cache.get("key_to_delete") == "value"
+        
+        result = temp_cache.delete("key_to_delete")
+        
+        assert result is True
+        assert temp_cache.get("key_to_delete") is None
+
+    def test_delete_nonexistent_key(self, temp_cache):
+        """Test deleting a non-existent cache entry."""
+        result = temp_cache.delete("nonexistent_key")
+        
+        assert result is False
+
+    def test_delete_does_not_affect_other_keys(self, temp_cache):
+        """Test that delete only removes the specified key."""
+        temp_cache.set("key1", "value1")
+        temp_cache.set("key2", "value2")
+        
+        temp_cache.delete("key1")
+        
+        assert temp_cache.get("key1") is None
+        assert temp_cache.get("key2") == "value2"

@@ -1,4 +1,5 @@
 """Databento MCP Server - Provides access to Databento market data API."""
+import hashlib
 import logging
 import os
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import databento as db
+import httpx
 from mcp.server import Server
 from mcp.types import (
     Resource,
@@ -3086,17 +3088,11 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                         text="Error: Batch job cancellation is not available in the current Databento SDK version."
                     )]
 
-            # Clear cached batch job data for this job_id
-            cache_keys_to_clear = [
-                f"batch_files:{job_id}",
-            ]
-            for ck in cache_keys_to_clear:
-                cache_path = cache._get_cache_path(cache._get_cache_key(ck))
-                if cache_path.exists():
-                    cache_path.unlink()
+            # Clear cached batch job data for this job_id using public method
+            cache.delete(f"batch_files:{job_id}")
 
             # Format response
-            result = f"Batch Job Cancellation:\n\n"
+            result = "Batch Job Cancellation:\n\n"
             result += f"Job ID: {job_id}\n"
             result += f"Status: {status}\n"
             result += f"Final State: {final_state}\n"
@@ -3160,8 +3156,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 )]
 
             # Download each file
-            import httpx
-
             downloaded_files = []
             total_size = 0
             errors = []
@@ -3191,7 +3185,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 if output_file.exists() and not overwrite:
                     errors.append({
                         "filename": filename,
-                        "error": f"File already exists. Use overwrite=true to replace."
+                        "error": "File already exists. Use overwrite=true to replace."
                     })
                     continue
 
@@ -3218,7 +3212,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     # Verify hash if available
                     expected_hash = file_info.get("hash")
                     if expected_hash:
-                        import hashlib
                         with open(output_file, 'rb') as f:
                             actual_hash = hashlib.sha256(f.read()).hexdigest()
                         if actual_hash != expected_hash:
@@ -3231,7 +3224,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     })
 
             # Format response
-            result = f"Batch File Download Results:\n\n"
+            result = "Batch File Download Results:\n\n"
             result += f"Job ID: {job_id}\n"
             result += f"Output Directory: {output_path}\n\n"
 
