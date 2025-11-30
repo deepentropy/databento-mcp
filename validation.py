@@ -51,7 +51,7 @@ ISO8601_PATTERN = re.compile(
 )
 
 # Regex for valid symbol characters (alphanumeric, dots, dashes, underscores, spaces)
-SYMBOL_PATTERN = re.compile(r"^[\w\.\-\s\*]+$")
+SYMBOL_PATTERN = re.compile(r"^[\w.\-\s*]+$")
 
 # Regex for dataset name pattern (VENUE.FORMAT like GLBX.MDP3)
 DATASET_PATTERN = re.compile(r"^[A-Z0-9]+\.[A-Z0-9]+$")
