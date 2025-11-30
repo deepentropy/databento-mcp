@@ -1,6 +1,6 @@
 """Tests for the validation module."""
 import pytest
-from validation import (
+from databento_mcp.validation import (
     ValidationError,
     validate_date_format,
     validate_symbols,

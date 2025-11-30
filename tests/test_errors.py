@@ -1,5 +1,5 @@
 """Tests for the errors module."""
-from errors import (
+from databento_mcp.errors import (
     ErrorCode,
     MCPError,
     validation_error,

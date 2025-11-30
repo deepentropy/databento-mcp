@@ -5,14 +5,14 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from async_io import read_dbn_file_async, write_parquet_async, read_parquet_async
+from databento_mcp.async_io import read_dbn_file_async, write_parquet_async, read_parquet_async
 
 
 class TestReadDbnFileAsync:
     """Tests for read_dbn_file_async function."""
 
     @pytest.mark.asyncio
-    @patch("async_io.db.DBNStore")
+    @patch("databento_mcp.async_io.db.DBNStore")
     async def test_reads_dbn_file(self, mock_dbn_store):
         """Test reading a DBN file asynchronously."""
         # Setup mock
@@ -31,7 +31,7 @@ class TestReadDbnFileAsync:
         mock_dbn_store.from_file.assert_called_once_with("/test/file.dbn")
 
     @pytest.mark.asyncio
-    @patch("async_io.db.DBNStore")
+    @patch("databento_mcp.async_io.db.DBNStore")
     async def test_applies_limit(self, mock_dbn_store):
         """Test that limit is applied to results."""
         mock_store = MagicMock()
@@ -45,7 +45,7 @@ class TestReadDbnFileAsync:
         assert len(df) == 10
 
     @pytest.mark.asyncio
-    @patch("async_io.db.DBNStore")
+    @patch("databento_mcp.async_io.db.DBNStore")
     async def test_applies_offset(self, mock_dbn_store):
         """Test that offset is applied to results."""
         mock_store = MagicMock()

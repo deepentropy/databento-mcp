@@ -2,7 +2,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from summaries import (
+from databento_mcp.summaries import (
     generate_data_summary,
     generate_quick_stats,
     _summarize_trades,

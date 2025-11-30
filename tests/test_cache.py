@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cache import Cache, CacheInfo
+from databento_mcp.cache import Cache, CacheInfo
 
 
 class TestCacheInfo:

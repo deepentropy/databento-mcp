@@ -1,7 +1,12 @@
-databento>=0.38.0
-mcp>=0.9.0
-python-dotenv>=1.0.0
-pyarrow>=13.0.0
+# Development requirements
+# For installation, use: pip install databento-mcp
+# For development: pip install -e ".[dev]"
+
+# Core dependencies (from pyproject.toml)
+databento>=0.30.0
+mcp>=1.0.0
 pandas>=1.5.3
+pyarrow>=13.0.0
 aiofiles>=23.0.0
+python-dotenv>=1.0.0
 

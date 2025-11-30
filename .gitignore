@@ -5,38 +5,35 @@ __pycache__/
 *.so
 .Python
 build/
-develop-eggs/
 dist/
-downloads/
 eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
 
 # Virtual environments
 venv/
+.venv/
 env/
-ENV/
-.venv
 
 # IDE
 .idea/
 .vscode/
 *.swp
-*.swo
-*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Cache
+.cache/
+*.cache
+cache/
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Environment variables
 .env
-
-# Cache
-cache/
-*.cache
 

@@ -1,6 +1,6 @@
 """Tests for the query_warnings module."""
 import pytest
-from query_warnings import (
+from databento_mcp.query_warnings import (
     estimate_query_size,
     check_query_warnings,
     generate_alternatives,

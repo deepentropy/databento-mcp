@@ -26,11 +26,11 @@ from mcp.types import (
 from mcp.server.stdio import stdio_server
 from dotenv import load_dotenv
 
-from cache import Cache
-from connection_pool import get_pool
-from metrics import get_metrics, TimedOperation
-from async_io import read_dbn_file_async, write_parquet_async, read_parquet_async
-from validation import (
+from .cache import Cache
+from .connection_pool import get_pool
+from .metrics import get_metrics, TimedOperation
+from .async_io import read_dbn_file_async, write_parquet_async, read_parquet_async
+from .validation import (
     ValidationError,
     validate_date_format,
     validate_symbols,
@@ -42,15 +42,15 @@ from validation import (
     validate_numeric_range,
     validate_date_range,
 )
-from retry import with_retry, is_transient_error, RetryError  # noqa: F401 - exported for future use
-from summaries import generate_data_summary
-from query_warnings import (
+from .retry import with_retry, is_transient_error, RetryError  # noqa: F401 - exported for future use
+from .summaries import generate_data_summary
+from .query_warnings import (
     estimate_query_size,
     format_query_warning,
     estimate_date_range_days,
     generate_explain_output,
 )
-from data_quality import analyze_data_quality
+from .data_quality import analyze_data_quality
 
 # Load environment variables
 load_dotenv()
@@ -3259,8 +3259,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
-async def main():
-    """Run the MCP server."""
+async def _async_main():
+    """Run the MCP server (async version)."""
     logger.info("Starting Databento MCP server")
     async with stdio_server() as (read_stream, write_stream):
         await app.run(
@@ -3270,6 +3270,11 @@ async def main():
         )
 
 
+def main():
+    """Entry point for the MCP server."""
+    asyncio.run(_async_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
 
