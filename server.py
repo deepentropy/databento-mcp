@@ -1980,9 +1980,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # Validate file path
             resolved_path = validate_file_path(file_path, must_exist=True)
 
-            # Read DBN file asynchronously
+            # Read DBN file asynchronously - first read all to get total count
             logger.debug(f"Reading DBN file: {resolved_path}")
-            metadata, df = await read_dbn_file_async(resolved_path, limit=0, offset=0)
+            metadata, full_df = await read_dbn_file_async(resolved_path, limit=0, offset=0)
+            total_records = len(full_df)
 
             # Build metadata info
             result = "DBN File Contents:\n\n"
@@ -1993,11 +1994,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"Start: {metadata.start}\n"
             result += f"End: {metadata.end}\n"
             result += f"Symbol Count: {metadata.symbol_cstr_len}\n"
-
-            total_records = len(df)
             result += f"Total Records: {total_records}\n\n"
 
-            # Apply offset and limit
+            # Apply offset and limit in memory (already loaded for total count)
+            df = full_df
             if offset > 0:
                 df = df.iloc[offset:]
             if limit > 0:
