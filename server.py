@@ -1,4 +1,5 @@
 """Databento MCP Server - Provides access to Databento market data API."""
+import logging
 import os
 import sys
 import asyncio
@@ -10,7 +11,6 @@ from typing import Any
 
 import databento as db
 import pyarrow.parquet as pq
-import pandas as pd
 from mcp.server import Server
 from mcp.types import (
     Resource,
@@ -21,9 +21,50 @@ from mcp.server.stdio import stdio_server
 from dotenv import load_dotenv
 
 from cache import Cache
+from validation import (
+    ValidationError,
+    validate_date_format,
+    validate_symbols,
+    validate_dataset,
+    validate_schema,
+    validate_encoding,
+    validate_compression,
+    validate_stype,
+    validate_numeric_range,
+    validate_date_range,
+)
+from retry import with_retry, is_transient_error, RetryError  # noqa: F401 - exported for future use
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+def _configure_logging() -> logging.Logger:
+    """Configure logging based on DATABENTO_LOG_LEVEL environment variable."""
+    log_level_str = os.getenv("DATABENTO_LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+    
+    # Configure root logger
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        stream=sys.stderr,
+    )
+    
+    # Create logger for this module
+    logger = logging.getLogger("databento_mcp")
+    logger.setLevel(log_level)
+    
+    # Suppress noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    
+    logger.info(f"Databento MCP server logging initialized at level: {log_level_str}")
+    return logger
+
+
+logger = _configure_logging()
 
 # Initialize cache (1 hour default TTL)
 cache = Cache(cache_dir="cache", default_ttl=3600)
@@ -684,15 +725,27 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
+    logger.info(f"Tool call: {name} with arguments: {arguments}")
 
     if name == "get_historical_data":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            validate_date_format(arguments["start"], "start")
+            validate_date_format(arguments["end"], "end")
+            validate_date_range(arguments["start"], arguments["end"])
+            schema = arguments.get("schema", "trades")
+            validate_schema(schema)
+            limit = arguments.get("limit", 1000)
+            validate_numeric_range(limit, "limit", min_value=1, max_value=100000)
+        except ValidationError as e:
+            logger.warning(f"Validation error in get_historical_data: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
         start = arguments["start"]
         end = arguments["end"]
-        schema = arguments.get("schema", "trades")
-        limit = arguments.get("limit", 1000)
 
         # Create cache key
         cache_key = f"historical:{dataset}:{','.join(sorted(symbols))}:{start}:{end}:{schema}:{limit}"
@@ -700,6 +753,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for get_historical_data: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Historical data for {', '.join(symbols)}:\n\n{cached_data}"
@@ -707,6 +761,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Fetch data from Databento
+            logger.debug("Fetching historical data from Databento API")
             data = client.timeseries.get_range(
                 dataset=dataset,
                 symbols=symbols,
@@ -729,16 +784,27 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache the result
             cache.set(cache_key, result, ttl=3600)
-
+            
+            logger.info(f"Successfully retrieved {len(df)} records for get_historical_data")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_historical_data: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error retrieving historical data: {str(e)}")]
 
     elif name == "get_symbol_metadata":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            validate_date_format(arguments["start"], "start")
+            if arguments.get("end"):
+                validate_date_format(arguments["end"], "end")
+        except ValidationError as e:
+            logger.warning(f"Validation error in get_symbol_metadata: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
         start = arguments["start"]
         end = arguments.get("end")
 
@@ -748,6 +814,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for get_symbol_metadata: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Metadata:\n\n{cached_data}"
@@ -755,6 +822,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Fetch metadata
+            logger.debug("Fetching symbol metadata from Databento API")
             metadata = client.metadata.get_dataset_range(
                 dataset=dataset,
                 symbols=symbols,
@@ -780,13 +848,23 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache the result
             cache.set(cache_key, result, ttl=7200)  # 2 hour TTL for metadata
-
+            
+            logger.info("Successfully retrieved metadata for get_symbol_metadata")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_symbol_metadata: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error retrieving metadata: {str(e)}")]
 
     elif name == "search_instruments":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            validate_date_format(arguments["start"], "start")
+        except ValidationError as e:
+            logger.warning(f"Validation error in search_instruments: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
         symbols = arguments.get("symbols", "*")
         start = arguments["start"]
@@ -797,6 +875,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for search_instruments: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Search results:\n\n{cached_data}"
@@ -804,6 +883,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Search for instruments
+            logger.debug("Searching instruments from Databento API")
             instruments = client.metadata.get_dataset_range(
                 dataset=dataset,
                 symbols=[symbols] if symbols else ["*"],
@@ -828,10 +908,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache the result
             cache.set(cache_key, result, ttl=7200)  # 2 hour TTL
-
+            
+            logger.info(f"Successfully found {count} instruments for search_instruments")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in search_instruments: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error searching instruments: {str(e)}")]
 
     elif name == "list_datasets":
@@ -841,6 +923,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug("Cache hit for list_datasets")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Available datasets:\n\n{cached_data}"
@@ -848,6 +931,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # List datasets
+            logger.debug("Listing datasets from Databento API")
             datasets = client.metadata.list_datasets()
 
             # Format response
@@ -857,10 +941,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache the result
             cache.set(cache_key, result, ttl=86400)  # 24 hour TTL
-
+            
+            logger.info(f"Successfully listed {len(datasets)} datasets")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in list_datasets: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error listing datasets: {str(e)}")]
 
     elif name == "clear_cache":
@@ -869,18 +955,31 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         try:
             if expired_only:
                 cache.clear_expired()
+                logger.info("Cleared expired cache entries")
                 return [TextContent(type="text", text="Expired cache entries cleared successfully.")]
             else:
                 cache.clear()
+                logger.info("Cleared all cache entries")
                 return [TextContent(type="text", text="All cache entries cleared successfully.")]
         except Exception as e:
+            logger.error(f"Error in clear_cache: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error clearing cache: {str(e)}")]
 
     elif name == "get_cost":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            schema = arguments.get("schema", "trades")
+            validate_schema(schema)
+            validate_date_format(arguments["start"], "start")
+            validate_date_format(arguments["end"], "end")
+            validate_date_range(arguments["start"], arguments["end"])
+        except ValidationError as e:
+            logger.warning(f"Validation error in get_cost: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
-        schema = arguments.get("schema", "trades")
         start = arguments["start"]
         end = arguments["end"]
 
@@ -890,6 +989,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for get_cost: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Cost estimate:\n\n{cached_data}"
@@ -897,6 +997,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Get cost estimate
+            logger.debug("Fetching cost estimate from Databento API")
             cost = client.metadata.get_cost(
                 dataset=dataset,
                 symbols=symbols,
@@ -934,27 +1035,32 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache the result (shorter TTL as prices may change)
             cache.set(cache_key, result, ttl=1800)  # 30 minute TTL
-
+            
+            logger.info(f"Successfully estimated cost: ${cost:.4f}")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_cost: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error estimating cost: {str(e)}")]
 
     elif name == "get_live_data":
-        dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
-        schema = arguments.get("schema", "trades")
-        duration = arguments.get("duration", 10)
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            schema = arguments.get("schema", "trades")
+            validate_schema(schema)
+            duration = arguments.get("duration", 10)
+            validate_numeric_range(duration, "duration", min_value=1, max_value=60)
+        except ValidationError as e:
+            logger.warning(f"Validation error in get_live_data: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
 
-        # Validate duration (max 60 seconds to prevent long-running calls)
-        if duration < 1:
-            return [TextContent(type="text", text="Error: duration must be at least 1 second")]
-        if duration > 60:
-            return [TextContent(type="text", text="Error: duration cannot exceed 60 seconds")]
+        dataset = arguments["dataset"]
 
         try:
             # Create Live client
+            logger.debug(f"Starting live data stream for {duration} seconds")
             live_client = db.Live(key=api_key)
 
             # Subscribe to data
@@ -1001,17 +1107,30 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             else:
                 result += "No records received during the streaming period.\n"
 
+            logger.info(f"Successfully streamed {len(records)} records for get_live_data")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_live_data: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error streaming live data: {str(e)}")]
 
     elif name == "resolve_symbols":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            stype_in = arguments.get("stype_in", "raw_symbol")
+            stype_out = arguments.get("stype_out", "instrument_id")
+            validate_stype(stype_in, "stype_in")
+            validate_stype(stype_out, "stype_out")
+            validate_date_format(arguments["start"], "start")
+            if arguments.get("end"):
+                validate_date_format(arguments["end"], "end")
+        except ValidationError as e:
+            logger.warning(f"Validation error in resolve_symbols: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
-        stype_in = arguments.get("stype_in", "raw_symbol")
-        stype_out = arguments.get("stype_out", "instrument_id")
         start = arguments["start"]
         end = arguments.get("end")
 
@@ -1021,6 +1140,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for resolve_symbols: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Symbol resolution:\n\n{cached_data}"
@@ -1028,6 +1148,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Resolve symbols
+            logger.debug("Resolving symbols via Databento API")
             resolution = client.symbology.resolve(
                 dataset=dataset,
                 symbols=symbols,
@@ -1085,25 +1206,40 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache the result
             cache.set(cache_key, result, ttl=3600)  # 1 hour TTL
-
+            
+            logger.info(f"Successfully resolved {resolved_count}/{total_count} symbols")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in resolve_symbols: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error resolving symbols: {str(e)}")]
 
     elif name == "submit_batch_job":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            validate_schema(arguments["schema"])
+            validate_date_format(arguments["start"], "start")
+            validate_date_format(arguments["end"], "end")
+            validate_date_range(arguments["start"], arguments["end"])
+            encoding = arguments.get("encoding", "dbn")
+            validate_encoding(encoding)
+            compression = arguments.get("compression", "zstd")
+            validate_compression(compression)
+        except ValidationError as e:
+            logger.warning(f"Validation error in submit_batch_job: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
         schema = arguments["schema"]
         start = arguments["start"]
         end = arguments["end"]
-        encoding = arguments.get("encoding", "dbn")
-        compression = arguments.get("compression", "zstd")
         split_duration = arguments.get("split_duration", "day")
 
         try:
             # Submit batch job
+            logger.debug("Submitting batch job to Databento API")
             job_info = client.batch.submit_job(
                 dataset=dataset,
                 symbols=symbols,
@@ -1133,15 +1269,26 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             if "ts_received" in job_info:
                 result += f"Submitted: {job_info['ts_received']}\n"
 
+            logger.info(f"Successfully submitted batch job: {job_info.get('job_id', 'N/A')}")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in submit_batch_job: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error submitting batch job: {str(e)}")]
 
     elif name == "list_batch_jobs":
+        try:
+            # Validate inputs
+            limit = arguments.get("limit", 20)
+            validate_numeric_range(limit, "limit", min_value=1, max_value=100)
+            if arguments.get("since"):
+                validate_date_format(arguments["since"], "since")
+        except ValidationError as e:
+            logger.warning(f"Validation error in list_batch_jobs: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         states = arguments.get("states", "queued,processing,done")
         since = arguments.get("since")
-        limit = arguments.get("limit", 20)
 
         # Create cache key
         cache_key = f"batch_jobs:{states}:{since}:{limit}"
@@ -1149,6 +1296,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache with short TTL (batch job status changes frequently)
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for list_batch_jobs: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Batch jobs:\n\n{cached_data}"
@@ -1159,6 +1307,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             state_list = [s.strip() for s in states.split(",")]
 
             # List batch jobs
+            logger.debug("Listing batch jobs from Databento API")
             jobs = client.batch.list_jobs(states=state_list, since=since)
 
             # Limit results
@@ -1196,14 +1345,19 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache with short TTL (5 minutes)
             cache.set(cache_key, result, ttl=300)
-
+            
+            logger.info(f"Successfully listed {len(jobs)} batch jobs")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in list_batch_jobs: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error listing batch jobs: {str(e)}")]
 
     elif name == "get_batch_job_files":
         job_id = arguments["job_id"]
+        if not job_id:
+            logger.warning("Validation error in get_batch_job_files: job_id cannot be empty")
+            return [TextContent(type="text", text="Validation error: job_id cannot be empty")]
 
         # Create cache key
         cache_key = f"batch_files:{job_id}"
@@ -1211,6 +1365,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache with short TTL
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for get_batch_job_files: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Batch job files:\n\n{cached_data}"
@@ -1218,6 +1373,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Get file list for job
+            logger.debug(f"Getting files for batch job: {job_id}")
             files = client.batch.list_files(job_id=job_id)
 
             # Format response
@@ -1250,10 +1406,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache with short TTL (5 minutes)
             cache.set(cache_key, result, ttl=300)
-
+            
+            logger.info(f"Successfully retrieved {len(files)} files for batch job {job_id}")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_batch_job_files: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error getting batch job files: {str(e)}")]
 
     elif name == "get_session_info":
@@ -1262,6 +1420,11 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         try:
             # Parse timestamp or use current time
             if timestamp_str:
+                try:
+                    validate_date_format(timestamp_str, "timestamp")
+                except ValidationError as e:
+                    logger.warning(f"Validation error in get_session_info: {e}")
+                    return [TextContent(type="text", text=f"Validation error: {str(e)}")]
                 ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
@@ -1297,13 +1460,21 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"Current Timestamp: {ts.isoformat()}\n"
             result += f"UTC Hour: {utc_hour}\n"
 
+            logger.info(f"Successfully determined session info: {session_name}")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_session_info: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error determining session info: {str(e)}")]
 
     elif name == "list_publishers":
         dataset_filter = arguments.get("dataset")
+        if dataset_filter:
+            try:
+                validate_dataset(dataset_filter)
+            except ValidationError as e:
+                logger.warning(f"Validation error in list_publishers: {e}")
+                return [TextContent(type="text", text=f"Validation error: {str(e)}")]
 
         # Create cache key
         cache_key = f"publishers:{dataset_filter}"
@@ -1311,6 +1482,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for list_publishers: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Publishers:\n\n{cached_data}"
@@ -1318,6 +1490,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Get publishers
+            logger.debug("Listing publishers from Databento API")
             publishers = client.metadata.list_publishers()
 
             # Filter by dataset if specified
@@ -1340,15 +1513,25 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache for 24 hours (publishers rarely change)
             cache.set(cache_key, result, ttl=86400)
-
+            
+            logger.info(f"Successfully listed {len(publishers)} publishers")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in list_publishers: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error listing publishers: {str(e)}")]
 
     elif name == "list_fields":
+        try:
+            # Validate inputs
+            validate_schema(arguments["schema"])
+            encoding = arguments.get("encoding", "json")
+            validate_encoding(encoding)
+        except ValidationError as e:
+            logger.warning(f"Validation error in list_fields: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         schema = arguments["schema"]
-        encoding = arguments.get("encoding", "json")
 
         # Create cache key
         cache_key = f"fields:{schema}:{encoding}"
@@ -1356,6 +1539,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for list_fields: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Fields:\n\n{cached_data}"
@@ -1363,6 +1547,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Get fields
+            logger.debug(f"Listing fields for schema {schema}")
             fields = client.metadata.list_fields(schema=schema, encoding=encoding)
 
             # Format response
@@ -1380,13 +1565,21 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache for 24 hours (field definitions rarely change)
             cache.set(cache_key, result, ttl=86400)
-
+            
+            logger.info(f"Successfully listed {len(fields)} fields for schema {schema}")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in list_fields: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error listing fields: {str(e)}")]
 
     elif name == "get_dataset_range":
+        try:
+            validate_dataset(arguments["dataset"])
+        except ValidationError as e:
+            logger.warning(f"Validation error in get_dataset_range: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
 
         # Create cache key
@@ -1395,6 +1588,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Check cache
         cached_data = cache.get(cache_key)
         if cached_data is not None:
+            logger.debug(f"Cache hit for get_dataset_range: {cache_key}")
             return [TextContent(
                 type="text",
                 text=f"[Cached] Dataset range:\n\n{cached_data}"
@@ -1402,6 +1596,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         try:
             # Get dataset range
+            logger.debug(f"Getting dataset range for {dataset}")
             range_info = client.metadata.get_dataset_range(dataset=dataset)
 
             # Format response
@@ -1412,22 +1607,33 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Cache for 1 hour (dataset ranges can update)
             cache.set(cache_key, result, ttl=3600)
-
+            
+            logger.info(f"Successfully retrieved dataset range for {dataset}")
             return [TextContent(type="text", text=result)]
 
         except Exception as e:
+            logger.error(f"Error in get_dataset_range: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error getting dataset range: {str(e)}")]
 
     elif name == "read_dbn_file":
+        try:
+            # Validate inputs
+            limit = arguments.get("limit", 1000)
+            validate_numeric_range(limit, "limit", min_value=1, max_value=100000)
+            offset = arguments.get("offset", 0)
+            validate_numeric_range(offset, "offset", min_value=0)
+        except ValidationError as e:
+            logger.warning(f"Validation error in read_dbn_file: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         file_path = arguments["file_path"]
-        limit = arguments.get("limit", 1000)
-        offset = arguments.get("offset", 0)
 
         try:
             # Validate file path
             resolved_path = validate_file_path(file_path, must_exist=True)
 
             # Read DBN file using DBNStore
+            logger.debug(f"Reading DBN file: {resolved_path}")
             store = db.DBNStore.from_file(str(resolved_path))
 
             # Get metadata
@@ -1462,13 +1668,17 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 result += df.head(10).to_string()
                 result += "\n"
 
+            logger.info(f"Successfully read {len(df)} records from DBN file")
             return [TextContent(type="text", text=result)]
 
         except FileNotFoundError as e:
+            logger.warning(f"File not found in read_dbn_file: {e}")
             return [TextContent(type="text", text=f"File not found: {str(e)}")]
         except ValueError as e:
+            logger.warning(f"Invalid path in read_dbn_file: {e}")
             return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
         except Exception as e:
+            logger.error(f"Error in read_dbn_file: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error reading DBN file: {str(e)}")]
 
     elif name == "get_dbn_metadata":
@@ -1479,6 +1689,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             resolved_path = validate_file_path(file_path, must_exist=True)
 
             # Read DBN file using DBNStore
+            logger.debug(f"Reading DBN metadata from: {resolved_path}")
             store = db.DBNStore.from_file(str(resolved_path))
 
             # Get metadata
@@ -1496,7 +1707,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Get symbols if available
             if hasattr(metadata, 'symbols') and metadata.symbols:
-                result += f"\nSymbols:\n"
+                result += "\nSymbols:\n"
                 for symbol in metadata.symbols[:MAX_SYMBOLS_DISPLAY]:
                     result += f"  - {symbol}\n"
                 if len(metadata.symbols) > MAX_SYMBOLS_DISPLAY:
@@ -1504,34 +1715,49 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             # Get mappings if available
             if hasattr(store, 'symbology') and store.symbology:
-                result += f"\nSymbology Mappings:\n"
+                result += "\nSymbology Mappings:\n"
                 mappings = store.symbology
                 count = 0
                 for key, value in mappings.items():
                     if count >= MAX_MAPPINGS_DISPLAY:
-                        result += f"  ... and more mappings\n"
+                        result += "  ... and more mappings\n"
                         break
                     result += f"  {key}: {value}\n"
                     count += 1
 
+            logger.info(f"Successfully read DBN metadata from {file_path}")
             return [TextContent(type="text", text=result)]
 
         except FileNotFoundError as e:
+            logger.warning(f"File not found in get_dbn_metadata: {e}")
             return [TextContent(type="text", text=f"File not found: {str(e)}")]
         except ValueError as e:
+            logger.warning(f"Invalid path in get_dbn_metadata: {e}")
             return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
         except Exception as e:
+            logger.error(f"Error in get_dbn_metadata: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error reading DBN metadata: {str(e)}")]
 
     elif name == "write_dbn_file":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            validate_schema(arguments["schema"])
+            validate_date_format(arguments["start"], "start")
+            validate_date_format(arguments["end"], "end")
+            validate_date_range(arguments["start"], arguments["end"])
+            compression = arguments.get("compression", "zstd")
+            validate_compression(compression)
+        except ValidationError as e:
+            logger.warning(f"Validation error in write_dbn_file: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
         schema = arguments["schema"]
         start = arguments["start"]
         end = arguments["end"]
         output_path = arguments["output_path"]
-        compression = arguments.get("compression", "zstd")
 
         try:
             # Determine final path with correct extension using helper function
@@ -1541,6 +1767,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             resolved_path = validate_file_path(final_path, must_exist=False)
 
             # Query data and write to file
+            logger.debug(f"Writing DBN file to: {resolved_path}")
             data = client.timeseries.get_range(
                 dataset=dataset,
                 symbols=symbols,
@@ -1568,11 +1795,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"Symbols: {', '.join(symbols)}\n"
             result += f"Period: {start} to {end}\n"
 
+            logger.info(f"Successfully wrote {record_count} records to DBN file")
             return [TextContent(type="text", text=result)]
 
         except ValueError as e:
+            logger.warning(f"Invalid path in write_dbn_file: {e}")
             return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
         except Exception as e:
+            logger.error(f"Error in write_dbn_file: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error writing DBN file: {str(e)}")]
 
     elif name == "convert_dbn_to_parquet":
@@ -1603,6 +1833,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             input_size = resolved_input.stat().st_size
 
             # Read DBN file
+            logger.debug(f"Converting DBN to Parquet: {resolved_input} -> {resolved_output}")
             store = db.DBNStore.from_file(str(resolved_input))
             df = store.to_df()
             record_count = len(df)
@@ -1632,19 +1863,33 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             for col in columns:
                 result += f"  - {col}\n"
 
+            logger.info(f"Successfully converted DBN to Parquet: {record_count} records")
             return [TextContent(type="text", text=result)]
 
         except FileNotFoundError as e:
+            logger.warning(f"File not found in convert_dbn_to_parquet: {e}")
             return [TextContent(type="text", text=f"File not found: {str(e)}")]
         except ValueError as e:
+            logger.warning(f"Invalid path in convert_dbn_to_parquet: {e}")
             return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
         except Exception as e:
+            logger.error(f"Error in convert_dbn_to_parquet: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error converting DBN to Parquet: {str(e)}")]
 
     elif name == "export_to_parquet":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            validate_schema(arguments["schema"])
+            validate_date_format(arguments["start"], "start")
+            validate_date_format(arguments["end"], "end")
+            validate_date_range(arguments["start"], arguments["end"])
+        except ValidationError as e:
+            logger.warning(f"Validation error in export_to_parquet: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         dataset = arguments["dataset"]
-        symbols = arguments["symbols"].split(",")
-        symbols = [s.strip() for s in symbols]
         schema = arguments["schema"]
         start = arguments["start"]
         end = arguments["end"]
@@ -1659,6 +1904,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             resolved_path = validate_file_path(final_path, must_exist=False)
 
             # Query data
+            logger.debug(f"Exporting to Parquet: {resolved_path}")
             data = client.timeseries.get_range(
                 dataset=dataset,
                 symbols=symbols,
@@ -1697,16 +1943,26 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             for col in columns:
                 result += f"  - {col}\n"
 
+            logger.info(f"Successfully exported {record_count} records to Parquet")
             return [TextContent(type="text", text=result)]
 
         except ValueError as e:
+            logger.warning(f"Invalid path in export_to_parquet: {e}")
             return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
         except Exception as e:
+            logger.error(f"Error in export_to_parquet: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error exporting to Parquet: {str(e)}")]
 
     elif name == "read_parquet_file":
+        try:
+            # Validate inputs
+            limit = arguments.get("limit", 1000)
+            validate_numeric_range(limit, "limit", min_value=1, max_value=100000)
+        except ValidationError as e:
+            logger.warning(f"Validation error in read_parquet_file: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
         file_path = arguments["file_path"]
-        limit = arguments.get("limit", 1000)
         columns_str = arguments.get("columns")
 
         try:
@@ -1719,6 +1975,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 columns = [c.strip() for c in columns_str.split(",")]
 
             # Read Parquet file
+            logger.debug(f"Reading Parquet file: {resolved_path}")
             parquet_file = pq.read_table(str(resolved_path), columns=columns)
             df = parquet_file.to_pandas()
 
@@ -1751,21 +2008,27 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 result += df_limited.head(10).to_string()
                 result += "\n"
 
+            logger.info(f"Successfully read {len(df_limited)} records from Parquet file")
             return [TextContent(type="text", text=result)]
 
         except FileNotFoundError as e:
+            logger.warning(f"File not found in read_parquet_file: {e}")
             return [TextContent(type="text", text=f"File not found: {str(e)}")]
         except ValueError as e:
+            logger.warning(f"Invalid path in read_parquet_file: {e}")
             return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
         except Exception as e:
+            logger.error(f"Error in read_parquet_file: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error reading Parquet file: {str(e)}")]
 
     else:
+        logger.warning(f"Unknown tool called: {name}")
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
 async def main():
     """Run the MCP server."""
+    logger.info("Starting Databento MCP server")
     async with stdio_server() as (read_stream, write_stream):
         await app.run(
             read_stream,
