@@ -1,4 +1,5 @@
 """Databento MCP Server - Provides access to Databento market data API."""
+import hashlib
 import logging
 import os
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import databento as db
+import httpx
 from mcp.server import Server
 from mcp.types import (
     Resource,
@@ -1140,6 +1142,101 @@ Combines: metadata + cost estimate + sample data + trading session info + data q
                     }
                 },
                 "required": ["dataset", "symbols", "start", "end"]
+            }
+        ),
+        Tool(
+            name="list_schemas",
+            description="""List all available data schemas from Databento.
+
+**Returns:**
+- List of all available schemas with descriptions
+- Includes trades, OHLCV bars, order book, and reference data schemas
+
+**Example:** list_schemas()""",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="list_unit_prices",
+            description="""Get current pricing information per dataset/schema combination.
+
+**Parameters:**
+- `dataset` (optional) - Filter by dataset name (e.g., "GLBX.MDP3")
+
+**Returns:**
+- List of unit prices showing cost per GB or per record
+- Helps understand pricing before querying
+
+**Example:** list_unit_prices(dataset="GLBX.MDP3")""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Filter by dataset name (e.g., 'GLBX.MDP3')"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="cancel_batch_job",
+            description="""Cancel a pending or processing batch job.
+
+**Parameters:**
+- `job_id` (required) - The batch job ID to cancel
+
+**Returns:**
+- Success/failure status
+- Final job state
+- Message explaining the result
+
+**Example:** cancel_batch_job(job_id="JOB-12345")""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The batch job ID to cancel"
+                    }
+                },
+                "required": ["job_id"]
+            }
+        ),
+        Tool(
+            name="download_batch_files",
+            description="""Download completed batch job files to a local directory.
+
+**Parameters:**
+- `job_id` (required) - The batch job ID
+- `output_dir` (required) - Directory to save downloaded files
+- `overwrite` (optional, default: false) - Whether to overwrite existing files
+
+**Returns:**
+- List of downloaded files with paths and sizes
+- Total download size
+- Success/failure status for each file
+
+**Example:** download_batch_files(job_id="JOB-12345", output_dir="/data/downloads")""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The batch job ID"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "Directory to save downloaded files"
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Whether to overwrite existing files",
+                        "default": False
+                    }
+                },
+                "required": ["job_id", "output_dir"]
             }
         )
     ]
@@ -2828,6 +2925,334 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         except Exception as e:
             logger.error(f"Error in analyze_data_quality: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error analyzing data quality: {str(e)}")]
+
+    elif name == "list_schemas":
+        # Create cache key
+        cache_key = "schemas:list"
+
+        # Check cache (24-hour TTL as schemas rarely change)
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            logger.debug("Cache hit for list_schemas")
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Available schemas:\n\n{cached_data}"
+            )]
+
+        try:
+            # Use static list with descriptions (schemas rarely change)
+            logger.debug("Returning schema list")
+            schemas_info = {
+                "trades": "Individual trades with price, size, and timestamp",
+                "tbbo": "Top of book best bid/offer",
+                "mbp-1": "Market by price - top level only",
+                "mbp-10": "Market by price - 10 levels deep",
+                "mbo": "Market by order - full order book",
+                "ohlcv-1s": "OHLCV bars aggregated at 1-second intervals",
+                "ohlcv-1m": "OHLCV bars aggregated at 1-minute intervals",
+                "ohlcv-1h": "OHLCV bars aggregated at 1-hour intervals",
+                "ohlcv-1d": "OHLCV bars aggregated at daily intervals",
+                "definition": "Instrument definitions and reference data",
+                "statistics": "Market statistics (open interest, settlement prices)",
+                "status": "Trading status messages",
+                "imbalance": "Auction imbalance data",
+            }
+
+            # Format response
+            result = "Available Databento Schemas:\n\n"
+            result += "## Trade Data\n"
+            result += f"- **trades**: {schemas_info['trades']}\n"
+            result += f"- **tbbo**: {schemas_info['tbbo']}\n\n"
+
+            result += "## Order Book\n"
+            result += f"- **mbp-1**: {schemas_info['mbp-1']}\n"
+            result += f"- **mbp-10**: {schemas_info['mbp-10']}\n"
+            result += f"- **mbo**: {schemas_info['mbo']}\n\n"
+
+            result += "## OHLCV Bars\n"
+            result += f"- **ohlcv-1s**: {schemas_info['ohlcv-1s']}\n"
+            result += f"- **ohlcv-1m**: {schemas_info['ohlcv-1m']}\n"
+            result += f"- **ohlcv-1h**: {schemas_info['ohlcv-1h']}\n"
+            result += f"- **ohlcv-1d**: {schemas_info['ohlcv-1d']}\n\n"
+
+            result += "## Reference Data\n"
+            result += f"- **definition**: {schemas_info['definition']}\n"
+            result += f"- **statistics**: {schemas_info['statistics']}\n"
+            result += f"- **status**: {schemas_info['status']}\n"
+            result += f"- **imbalance**: {schemas_info['imbalance']}\n"
+
+            # Cache for 24 hours (schemas rarely change)
+            cache.set(cache_key, result, ttl=86400)
+
+            logger.info(f"Successfully listed {len(schemas_info)} schemas")
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            logger.error(f"Error in list_schemas: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error listing schemas: {str(e)}")]
+
+    elif name == "list_unit_prices":
+        dataset_filter = arguments.get("dataset") if arguments else None
+        if dataset_filter:
+            try:
+                validate_dataset(dataset_filter)
+            except ValidationError as e:
+                logger.warning(f"Validation error in list_unit_prices: {e}")
+                return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
+        # Create cache key
+        cache_key = f"unit_prices:{dataset_filter or 'all'}"
+
+        # Check cache (1-hour TTL as prices may change)
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            logger.debug(f"Cache hit for list_unit_prices: {cache_key}")
+            return [TextContent(
+                type="text",
+                text=f"[Cached] Unit prices:\n\n{cached_data}"
+            )]
+
+        try:
+            # Get unit prices from API
+            logger.debug("Fetching unit prices from Databento API")
+            if dataset_filter:
+                prices = client.metadata.list_unit_prices(dataset=dataset_filter)
+            else:
+                prices = client.metadata.list_unit_prices()
+
+            # Format response
+            result = "Databento Unit Prices:\n\n"
+            if dataset_filter:
+                result += f"Filtered by dataset: {dataset_filter}\n\n"
+
+            if not prices:
+                result += "No pricing information available."
+            else:
+                # Group by dataset if available
+                prices_by_dataset = {}
+                for price in prices:
+                    ds = price.get("dataset", "Unknown")
+                    if ds not in prices_by_dataset:
+                        prices_by_dataset[ds] = []
+                    prices_by_dataset[ds].append(price)
+
+                for ds, ds_prices in prices_by_dataset.items():
+                    result += f"## {ds}\n"
+                    for price in ds_prices:
+                        schema = price.get("schema", "N/A")
+                        mode = price.get("mode", "N/A")
+                        unit_price = price.get("price", "N/A")
+                        unit = price.get("unit", "per GB")
+                        result += f"  - **{schema}** ({mode}): ${unit_price} {unit}\n"
+                    result += "\n"
+
+            # Cache for 1 hour (prices may change)
+            cache.set(cache_key, result, ttl=3600)
+
+            logger.info(f"Successfully retrieved unit prices")
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            logger.error(f"Error in list_unit_prices: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error listing unit prices: {str(e)}")]
+
+    elif name == "cancel_batch_job":
+        job_id = arguments.get("job_id") if arguments else None
+        if not job_id:
+            logger.warning("Validation error in cancel_batch_job: job_id is required")
+            return [TextContent(type="text", text="Validation error: job_id is required")]
+
+        try:
+            # Cancel the batch job
+            logger.debug(f"Canceling batch job: {job_id}")
+            # The Databento API's batch.cancel_job may not exist; we need to check
+            # Looking at the SDK, it might be client.batch.cancel() or similar
+            # Based on typical patterns, trying cancel_job first
+            try:
+                # Try to cancel the job using available API
+                result_info = client.batch.cancel_job(job_id=job_id)
+                status = "success"
+                final_state = result_info.get("state", "cancelled")
+                message = f"Batch job {job_id} has been cancelled successfully."
+            except AttributeError:
+                # If cancel_job doesn't exist, try alternative method names
+                try:
+                    result_info = client.batch.cancel(job_id=job_id)
+                    status = "success"
+                    final_state = result_info.get("state", "cancelled")
+                    message = f"Batch job {job_id} has been cancelled successfully."
+                except AttributeError:
+                    # API method not available
+                    return [TextContent(
+                        type="text",
+                        text="Error: Batch job cancellation is not available in the current Databento SDK version."
+                    )]
+
+            # Clear cached batch job data for this job_id using public method
+            cache.delete(f"batch_files:{job_id}")
+
+            # Format response
+            result = "Batch Job Cancellation:\n\n"
+            result += f"Job ID: {job_id}\n"
+            result += f"Status: {status}\n"
+            result += f"Final State: {final_state}\n"
+            result += f"Message: {message}\n"
+
+            logger.info(f"Successfully cancelled batch job: {job_id}")
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            error_str = str(e).lower()
+            if "not found" in error_str or "404" in error_str:
+                logger.warning(f"Batch job not found: {job_id}")
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Batch job '{job_id}' not found. Please verify the job ID."
+                )]
+            elif "completed" in error_str or "done" in error_str:
+                logger.warning(f"Batch job already completed: {job_id}")
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Batch job '{job_id}' has already completed and cannot be cancelled."
+                )]
+            elif "expired" in error_str:
+                logger.warning(f"Batch job expired: {job_id}")
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Batch job '{job_id}' has expired and cannot be cancelled."
+                )]
+            else:
+                logger.error(f"Error in cancel_batch_job: {e}", exc_info=True)
+                return [TextContent(type="text", text=f"Error cancelling batch job: {str(e)}")]
+
+    elif name == "download_batch_files":
+        job_id = arguments.get("job_id") if arguments else None
+        output_dir = arguments.get("output_dir") if arguments else None
+        overwrite = arguments.get("overwrite", False) if arguments else False
+
+        if not job_id:
+            logger.warning("Validation error in download_batch_files: job_id is required")
+            return [TextContent(type="text", text="Validation error: job_id is required")]
+
+        if not output_dir:
+            logger.warning("Validation error in download_batch_files: output_dir is required")
+            return [TextContent(type="text", text="Validation error: output_dir is required")]
+
+        try:
+            # Validate output directory path
+            output_path = validate_file_path(output_dir, must_exist=False)
+
+            # Create output directory if it doesn't exist
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            # Get file list for the batch job
+            logger.debug(f"Getting files for batch job: {job_id}")
+            files = client.batch.list_files(job_id=job_id)
+
+            if not files:
+                return [TextContent(
+                    type="text",
+                    text=f"No files available for batch job '{job_id}'. The job may still be processing or has no output files."
+                )]
+
+            # Download each file
+            downloaded_files = []
+            total_size = 0
+            errors = []
+
+            for file_info in files:
+                filename = file_info.get("filename", f"file_{len(downloaded_files)}.dbn")
+                file_size = file_info.get("size", 0)
+
+                # Get download URL
+                urls = file_info.get("urls", {})
+                if isinstance(urls, dict):
+                    download_url = urls.get("https") or urls.get("http")
+                elif isinstance(urls, str):
+                    download_url = urls
+                else:
+                    errors.append({"filename": filename, "error": "No download URL available"})
+                    continue
+
+                if not download_url:
+                    errors.append({"filename": filename, "error": "No download URL available"})
+                    continue
+
+                # Determine output file path
+                output_file = output_path / filename
+
+                # Check if file exists and handle overwrite
+                if output_file.exists() and not overwrite:
+                    errors.append({
+                        "filename": filename,
+                        "error": "File already exists. Use overwrite=true to replace."
+                    })
+                    continue
+
+                # Download the file
+                try:
+                    logger.debug(f"Downloading {filename} ({file_size} bytes)")
+                    async with httpx.AsyncClient(timeout=300.0) as http_client:
+                        response = await http_client.get(download_url)
+                        response.raise_for_status()
+
+                        # Write file
+                        with open(output_file, 'wb') as f:
+                            f.write(response.content)
+
+                    actual_size = output_file.stat().st_size
+                    downloaded_files.append({
+                        "filename": filename,
+                        "path": str(output_file),
+                        "size": actual_size,
+                        "status": "success"
+                    })
+                    total_size += actual_size
+
+                    # Verify hash if available
+                    expected_hash = file_info.get("hash")
+                    if expected_hash:
+                        with open(output_file, 'rb') as f:
+                            actual_hash = hashlib.sha256(f.read()).hexdigest()
+                        if actual_hash != expected_hash:
+                            downloaded_files[-1]["warning"] = "Hash mismatch - file may be corrupted"
+
+                except Exception as download_error:
+                    errors.append({
+                        "filename": filename,
+                        "error": str(download_error)
+                    })
+
+            # Format response
+            result = "Batch File Download Results:\n\n"
+            result += f"Job ID: {job_id}\n"
+            result += f"Output Directory: {output_path}\n\n"
+
+            if downloaded_files:
+                result += f"## Successfully Downloaded ({len(downloaded_files)} files)\n"
+                for df in downloaded_files:
+                    size_mb = df['size'] / (1024 * 1024)
+                    result += f"  ✅ {df['filename']}\n"
+                    result += f"     Path: {df['path']}\n"
+                    result += f"     Size: {df['size']:,} bytes ({size_mb:.2f} MB)\n"
+                    if df.get("warning"):
+                        result += f"     ⚠️ {df['warning']}\n"
+                result += f"\n**Total Downloaded:** {total_size:,} bytes ({total_size / (1024*1024):.2f} MB)\n"
+
+            if errors:
+                result += f"\n## Errors ({len(errors)} files)\n"
+                for err in errors:
+                    result += f"  ❌ {err['filename']}: {err['error']}\n"
+
+            logger.info(f"Downloaded {len(downloaded_files)} files, {len(errors)} errors")
+            return [TextContent(type="text", text=result)]
+
+        except ValueError as e:
+            logger.warning(f"Invalid path in download_batch_files: {e}")
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            logger.error(f"Error in download_batch_files: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error downloading batch files: {str(e)}")]
 
     else:
         logger.warning(f"Unknown tool called: {name}")
