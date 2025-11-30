@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from metrics import MetricsCollector, ToolMetrics, TimedOperation, get_metrics
+from databento_mcp.metrics import MetricsCollector, ToolMetrics, TimedOperation, get_metrics
 
 
 class TestToolMetrics:

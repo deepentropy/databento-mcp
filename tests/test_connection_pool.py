@@ -4,7 +4,7 @@ import threading
 from unittest.mock import MagicMock, patch
 
 
-from connection_pool import DatabentoConnectionPool, get_pool
+from databento_mcp.connection_pool import DatabentoConnectionPool, get_pool
 
 
 class TestDatabentoConnectionPool:
@@ -27,7 +27,7 @@ class TestDatabentoConnectionPool:
         assert pool1 is pool2
         assert pool1 is DatabentoConnectionPool.get_instance()
 
-    @patch("connection_pool.db.Historical")
+    @patch("databento_mcp.connection_pool.db.Historical")
     def test_get_historical_client_creates_once(self, mock_historical):
         """Test that historical client is created only once."""
         mock_client = MagicMock()
@@ -40,7 +40,7 @@ class TestDatabentoConnectionPool:
         assert client1 is client2
         assert mock_historical.call_count == 1
 
-    @patch("connection_pool.db.Live")
+    @patch("databento_mcp.connection_pool.db.Live")
     def test_get_live_client_creates_new_each_time(self, mock_live):
         """Test that live client is created new each time."""
         mock_client1 = MagicMock()
@@ -54,7 +54,7 @@ class TestDatabentoConnectionPool:
         assert client1 is not client2
         assert mock_live.call_count == 2
 
-    @patch("connection_pool.db.Historical")
+    @patch("databento_mcp.connection_pool.db.Historical")
     def test_reset_clears_historical_client(self, mock_historical):
         """Test that reset clears the historical client."""
         mock_client1 = MagicMock()

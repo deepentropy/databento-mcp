@@ -1,7 +1,7 @@
 """Tests for the retry module."""
 import pytest
 import httpx
-from retry import (
+from databento_mcp.retry import (
     RetryError,
     is_transient_error,
     is_rate_limit_error,

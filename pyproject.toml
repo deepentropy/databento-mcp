@@ -1,29 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "databento-mcp"
 version = "0.1.0"
-description = "MCP server for accessing Databento market data API"
+description = "Model Context Protocol server for Databento market data"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
+authors = [
+    { name = "deepentropy" }
+]
+keywords = ["mcp", "databento", "market-data", "trading", "claude", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
-    "databento>=0.38.0",
-    "mcp>=0.9.0",
-    "python-dotenv>=1.0.0",
-    "pyarrow>=13.0.0",
+    "databento>=0.30.0",
+    "mcp>=1.0.0",
     "pandas>=1.5.3",
+    "pyarrow>=13.0.0",
     "aiofiles>=23.0.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "pytest-asyncio>=0.23.0",
+    "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
 
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_backend"
+[project.scripts]
+databento-mcp = "databento_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/deepentropy/databento-mcp"
+Repository = "https://github.com/deepentropy/databento-mcp"
+Documentation = "https://github.com/deepentropy/databento-mcp#readme"
+Issues = "https://github.com/deepentropy/databento-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databento_mcp"]
 
 [tool.black]
 line-length = 100

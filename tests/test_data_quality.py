@@ -3,7 +3,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from data_quality import (
+from databento_mcp.data_quality import (
     DataQualityReport,
     analyze_data_quality,
     detect_time_gaps,

@@ -14,11 +14,11 @@ class TestListSchemas:
     def test_list_schemas_returns_all_schemas(self):
         """Test that list_schemas returns all expected schemas."""
         # Clear cache using public API
-        from server import cache
+        from databento_mcp.cache import Cache; cache = Cache()
         cache.clear()
 
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             # Run the tool
             result = asyncio.run(call_tool("list_schemas", {}))
@@ -39,8 +39,8 @@ class TestListSchemas:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_list_schemas_includes_descriptions(self):
         """Test that list_schemas includes descriptions for each schema."""
-        with patch("server.client"):
-            from server import call_tool
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import call_tool
 
             result = asyncio.run(call_tool("list_schemas", {}))
             text = result[0].text
@@ -63,11 +63,11 @@ class TestListUnitPrices:
     def test_list_unit_prices_without_filter(self):
         """Test list_unit_prices without dataset filter."""
         # Clear cache
-        from server import cache
+        from databento_mcp.cache import Cache; cache = Cache()
         cache.clear()
 
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             # Mock the API response
             mock_client.metadata.list_unit_prices.return_value = [
@@ -85,11 +85,11 @@ class TestListUnitPrices:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_list_unit_prices_with_dataset_filter(self):
         """Test list_unit_prices with dataset filter."""
-        from server import cache
+        from databento_mcp.cache import Cache; cache = Cache()
         cache.clear()
 
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.metadata.list_unit_prices.return_value = [
                 {"dataset": "GLBX.MDP3", "schema": "trades", "mode": "historical", "price": "0.01", "unit": "per GB"},
@@ -104,8 +104,8 @@ class TestListUnitPrices:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_list_unit_prices_invalid_dataset(self):
         """Test list_unit_prices with invalid dataset format."""
-        with patch("server.client"):
-            from server import call_tool
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import call_tool
 
             result = asyncio.run(call_tool("list_unit_prices", {"dataset": "invalid"}))
 
@@ -115,11 +115,11 @@ class TestListUnitPrices:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_list_unit_prices_empty_response(self):
         """Test list_unit_prices when API returns empty list."""
-        from server import cache
+        from databento_mcp.cache import Cache; cache = Cache()
         cache.clear()
 
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.metadata.list_unit_prices.return_value = []
 
@@ -135,8 +135,8 @@ class TestCancelBatchJob:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_cancel_batch_job_success(self):
         """Test successful batch job cancellation."""
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.batch.cancel_job.return_value = {"state": "cancelled"}
 
@@ -149,8 +149,8 @@ class TestCancelBatchJob:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_cancel_batch_job_missing_job_id(self):
         """Test cancel_batch_job with missing job_id."""
-        with patch("server.client"):
-            from server import call_tool
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import call_tool
 
             result = asyncio.run(call_tool("cancel_batch_job", {}))
 
@@ -160,8 +160,8 @@ class TestCancelBatchJob:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_cancel_batch_job_empty_job_id(self):
         """Test cancel_batch_job with empty job_id."""
-        with patch("server.client"):
-            from server import call_tool
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import call_tool
 
             result = asyncio.run(call_tool("cancel_batch_job", {"job_id": ""}))
 
@@ -171,8 +171,8 @@ class TestCancelBatchJob:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_cancel_batch_job_not_found(self):
         """Test cancel_batch_job when job is not found."""
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.batch.cancel_job.side_effect = Exception("Job not found (404)")
 
@@ -184,8 +184,8 @@ class TestCancelBatchJob:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_cancel_batch_job_already_completed(self):
         """Test cancel_batch_job when job is already completed."""
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.batch.cancel_job.side_effect = Exception("Job already completed")
 
@@ -201,8 +201,8 @@ class TestDownloadBatchFiles:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_download_batch_files_missing_job_id(self):
         """Test download_batch_files with missing job_id."""
-        with patch("server.client"):
-            from server import call_tool
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import call_tool
 
             result = asyncio.run(call_tool("download_batch_files", {"output_dir": "/tmp"}))
 
@@ -212,8 +212,8 @@ class TestDownloadBatchFiles:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_download_batch_files_missing_output_dir(self):
         """Test download_batch_files with missing output_dir."""
-        with patch("server.client"):
-            from server import call_tool
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import call_tool
 
             result = asyncio.run(call_tool("download_batch_files", {"job_id": "JOB-12345"}))
 
@@ -223,8 +223,8 @@ class TestDownloadBatchFiles:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_download_batch_files_no_files(self):
         """Test download_batch_files when job has no files."""
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.batch.list_files.return_value = []
 
@@ -240,8 +240,8 @@ class TestDownloadBatchFiles:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_download_batch_files_with_files(self):
         """Test download_batch_files with available files."""
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.batch.list_files.return_value = [
                 {
@@ -275,8 +275,8 @@ class TestDownloadBatchFiles:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_download_batch_files_file_exists_no_overwrite(self):
         """Test download_batch_files when file exists and overwrite is false."""
-        with patch("server.client") as mock_client:
-            from server import call_tool
+        with patch("databento_mcp.server.client") as mock_client:
+            from databento_mcp.server import call_tool
 
             mock_client.batch.list_files.return_value = [
                 {
@@ -308,8 +308,8 @@ class TestToolRegistration:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_new_tools_registered_in_list_tools(self):
         """Test that all new tools are registered in list_tools."""
-        with patch("server.client"):
-            from server import list_tools
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import list_tools
 
             tools = asyncio.run(list_tools())
             tool_names = [tool.name for tool in tools]
@@ -322,8 +322,8 @@ class TestToolRegistration:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_list_schemas_input_schema(self):
         """Test list_schemas has correct input schema."""
-        with patch("server.client"):
-            from server import list_tools
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import list_tools
 
             tools = asyncio.run(list_tools())
             list_schemas_tool = next(t for t in tools if t.name == "list_schemas")
@@ -335,8 +335,8 @@ class TestToolRegistration:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_cancel_batch_job_input_schema(self):
         """Test cancel_batch_job has correct input schema."""
-        with patch("server.client"):
-            from server import list_tools
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import list_tools
 
             tools = asyncio.run(list_tools())
             cancel_tool = next(t for t in tools if t.name == "cancel_batch_job")
@@ -347,8 +347,8 @@ class TestToolRegistration:
     @patch.dict(os.environ, {"DATABENTO_API_KEY": "test_key"})
     def test_download_batch_files_input_schema(self):
         """Test download_batch_files has correct input schema."""
-        with patch("server.client"):
-            from server import list_tools
+        with patch("databento_mcp.server.client"):
+            from databento_mcp.server import list_tools
 
             tools = asyncio.run(list_tools())
             download_tool = next(t for t in tools if t.name == "download_batch_files")

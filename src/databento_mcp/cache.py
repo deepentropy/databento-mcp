@@ -259,4 +259,3 @@ class Cache:
             except (json.JSONDecodeError, KeyError, ValueError):
                 cache_file.unlink(missing_ok=True)
 
-
