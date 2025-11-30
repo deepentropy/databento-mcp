@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/deepentropy/databento-mcp/main/banner.svg" alt="Databento MCP" width="400">
-</p>
+![Databento MCP](https://raw.githubusercontent.com/deepentropy/databento-mcp/main/banner.svg)
 
 <p align="center">
   <strong>Model Context Protocol server for Databento market data</strong>
@@ -50,14 +48,49 @@ Add to your configuration file:
 
 ### GitHub Copilot CLI
 
+Add the server to your Copilot CLI configuration:
+
 ```bash
-export DATABENTO_API_KEY="your-api-key"
-databento-mcp
+gh copilot config set mcp-servers '{
+  "databento": {
+    "command": "databento-mcp",
+    "env": {
+      "DATABENTO_API_KEY": "your-api-key"
+    }
+  }
+}'
 ```
 
-### ChatGPT
+Or add to your `~/.config/gh-copilot/config.yml`:
 
-ChatGPT requires an MCP-to-OpenAI bridge. See [MCP Bridge](https://github.com/anthropics/anthropic-tools) for integration options.
+```yaml
+mcp-servers:
+  databento:
+    command: databento-mcp
+    env:
+      DATABENTO_API_KEY: your-api-key
+```
+
+See [GitHub Copilot CLI MCP documentation](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli#add-an-mcp-server) for more details.
+
+### ChatGPT (via Developer Mode)
+
+ChatGPT supports MCP servers through Developer Mode. 
+
+1. Enable Developer Mode in ChatGPT settings
+2. Add an MCP server with the following configuration:
+
+```json
+{
+  "name": "databento",
+  "command": "databento-mcp",
+  "env": {
+    "DATABENTO_API_KEY": "your-api-key"
+  }
+}
+```
+
+See [OpenAI Developer Mode documentation](https://platform.openai.com/docs/guides/developer-mode) for detailed setup instructions.
 
 ## Features
 
