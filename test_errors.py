@@ -127,6 +127,7 @@ class TestMCPError:
         )
         response = error.to_response()
         assert "⚠️ This error may require configuration changes" in response
+        assert "support@databento.com" in response
 
 
 class TestErrorFactories:

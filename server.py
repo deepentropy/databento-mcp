@@ -994,9 +994,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         
         try:
             # Test API connectivity
-            start_time = time.time()
+            start_time = time.perf_counter()
             datasets = client.metadata.list_datasets()
-            response_time = time.time() - start_time
+            response_time = time.perf_counter() - start_time
             
             # Build health status
             result = "🟢 Health Check: HEALTHY\n\n"
@@ -1007,7 +1007,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             
             if verbose:
                 result += "\n📋 Diagnostic Details:\n"
-                result += f"  - API Key: {'*' * 8}...{api_key[-4:] if api_key else 'Not set'}\n"
+                # Safely display API key suffix (only if key is long enough)
+                if api_key and len(api_key) >= 8:
+                    key_display = f"{'*' * 8}...{api_key[-4:]}"
+                else:
+                    key_display = "Set (hidden)" if api_key else "Not set"
+                result += f"  - API Key: {key_display}\n"
                 result += f"  - Log Level: {os.getenv('DATABENTO_LOG_LEVEL', 'INFO')}\n"
                 result += f"  - Data Directory: {ALLOWED_DATA_DIR or 'Not restricted'}\n"
                 result += f"  - Cache Directory: {cache.cache_dir}\n"

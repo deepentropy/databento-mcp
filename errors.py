@@ -54,7 +54,7 @@ class MCPError:
         if self.recoverable:
             response += "\n✅ This error is recoverable. Please fix the issue and try again."
         else:
-            response += "\n⚠️ This error may require configuration changes or support contact."
+            response += "\n⚠️ This error may require configuration changes. Contact support@databento.com if the issue persists."
         return response
 
 
