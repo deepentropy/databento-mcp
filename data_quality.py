@@ -234,9 +234,14 @@ def detect_time_gaps(
     return gaps
 
 
+# Default maximum number of outliers to report
+MAX_OUTLIERS_REPORTED = 100
+
+
 def detect_price_outliers(
     df: pd.DataFrame,
     std_threshold: float = 3.0,
+    max_outliers: int = MAX_OUTLIERS_REPORTED,
 ) -> List[Dict[str, Any]]:
     """
     Detect price outliers using standard deviation method.
@@ -244,6 +249,7 @@ def detect_price_outliers(
     Args:
         df: DataFrame containing market data
         std_threshold: Number of standard deviations for outlier detection
+        max_outliers: Maximum number of outliers to report (default: MAX_OUTLIERS_REPORTED)
 
     Returns:
         List of detected outliers with details
@@ -283,7 +289,7 @@ def detect_price_outliers(
         deviations = np.abs(prices - mean_price) / std_price
         outlier_mask = deviations > std_threshold
 
-        for idx in prices[outlier_mask].index[:100]:  # Limit to first 100
+        for idx in prices[outlier_mask].index[:max_outliers]:
             outliers.append(
                 {
                     "index": int(idx) if hasattr(idx, "__int__") else str(idx),

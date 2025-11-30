@@ -1320,9 +1320,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"Sample data (first 10 rows):\n{df.head(10).to_string()}\n\n"
             result += f"Summary statistics:\n{df.describe().to_string()}"
 
-            # Add smart data summary
-            data_summary = generate_data_summary(df, schema)
-            result += f"\n\n{data_summary}"
+            # Add smart data summary for smaller datasets to avoid performance impact
+            # Summary is generated only if we have a reasonable number of records
+            if len(df) <= 50000:
+                data_summary = generate_data_summary(df, schema)
+                result += f"\n\n{data_summary}"
+            else:
+                result += f"\n\n📊 Data summary skipped for large dataset ({len(df):,} records)"
+                result += "\n💡 Use limit parameter for smaller samples with full summary"
 
             # Cache the result
             cache.set(cache_key, result, ttl=3600)
