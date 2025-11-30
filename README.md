@@ -17,6 +17,9 @@ A Model Context Protocol (MCP) server for accessing Databento's financial market
 ✅ **DBN File Processing** - Read, write, and parse DBN format files  
 ✅ **Parquet Export** - Convert data to Apache Parquet format  
 ✅ **Smart Caching** - File-based cache with automatic expiration to reduce API calls  
+✅ **Input Validation** - Comprehensive validation of all inputs with clear error messages  
+✅ **Retry Logic** - Automatic retries with exponential backoff for transient errors  
+✅ **Structured Logging** - Configurable logging with DATABENTO_LOG_LEVEL  
 ✅ **MCP Compatible** - Works with Claude Desktop and other MCP clients  
 
 ## Quick Start
@@ -310,6 +313,66 @@ The server implements path validation to prevent directory traversal attacks:
 - Paths containing `..` are rejected
 - Set `DATABENTO_DATA_DIR` environment variable to restrict file operations to a specific directory
 
+## Input Validation
+
+All tool inputs are validated before processing:
+
+- **Date formats**: Must be YYYY-MM-DD or ISO 8601 (e.g., "2024-01-15T10:30:00Z")
+- **Date ranges**: Start date must be before or equal to end date
+- **Symbols**: Non-empty, valid characters (alphanumeric, dots, dashes, underscores)
+- **Dataset names**: Must follow VENUE.FORMAT pattern (e.g., "GLBX.MDP3")
+- **Schema**: Must be a known schema (trades, ohlcv-1m, mbp-1, etc.)
+- **Encoding**: Must be "dbn", "csv", or "json"
+- **Compression**: Must be "none" or "zstd"
+- **Symbol types (stype)**: Must be "raw_symbol", "instrument_id", "continuous", "parent", or "smart"
+- **Numeric parameters**: Validated against min/max bounds (e.g., limit: 1-100000, duration: 1-60)
+
+Invalid inputs return clear error messages explaining the validation failure.
+
+## Retry Behavior
+
+The server includes a retry module for handling transient API errors:
+
+- **Exponential backoff**: Delays increase exponentially between retries (1s, 2s, 4s, etc.)
+- **Jitter**: Random variation in delay times to prevent thundering herd
+- **Rate limit detection**: HTTP 429 errors trigger retries with appropriate backoff
+- **Transient error detection**: Connection errors, timeouts, and 502/503/504 errors are retried
+- **Configurable retries**: Default is 3 retry attempts
+- **Logging**: All retry attempts are logged with error details
+
+## Logging
+
+The server provides structured logging for debugging and monitoring.
+
+### DATABENTO_LOG_LEVEL
+
+Control the logging verbosity by setting the `DATABENTO_LOG_LEVEL` environment variable:
+
+```bash
+# Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+export DATABENTO_LOG_LEVEL=DEBUG
+
+# Or in .env file
+DATABENTO_LOG_LEVEL=INFO
+```
+
+**Log Levels:**
+- `DEBUG`: Detailed information for debugging (API calls, cache hits, etc.)
+- `INFO`: General operational information (default)
+- `WARNING`: Warnings and validation errors
+- `ERROR`: Errors with stack traces
+- `CRITICAL`: Critical failures
+
+**What's logged:**
+- Tool calls with parameters
+- Success/failure of operations
+- API errors with full stack traces
+- Cache hits and misses
+- Retry attempts
+
+**Suppressed loggers:**
+- `httpx`, `httpcore`, `asyncio` are set to WARNING level to reduce noise
+
 ## Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Step-by-step setup guide
@@ -322,6 +385,8 @@ The server implements path validation to prevent directory traversal attacks:
 databento-mcp/
 ├── server.py          # Main MCP server implementation
 ├── cache.py           # File-based caching system
+├── validation.py      # Input validation module
+├── retry.py           # Retry logic with exponential backoff
 ├── requirements.txt   # Python dependencies
 ├── pyproject.toml     # Project configuration
 ├── test_setup.py      # Configuration verification script
