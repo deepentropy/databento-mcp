@@ -27,7 +27,17 @@ A Model Context Protocol (MCP) server for accessing Databento's financial market
 ✅ **MCP Compatible** - Works with Claude Desktop and other MCP clients  
 ✅ **Connection Pooling** - Singleton connection pool for better performance  
 ✅ **Metrics & Telemetry** - Server performance metrics and usage statistics  
-✅ **Async File I/O** - Optimized async operations for file processing  
+✅ **Async File I/O** - Optimized async operations for file processing
+
+### ✨ New UX Features
+
+✅ **Smart Data Summaries** - Auto-generated statistics (price range, volume, trade count) with insights  
+✅ **Enhanced Cache Feedback** - Show cache age, expiration time, and `force_refresh` option  
+✅ **Query Size Warnings** - Estimates and warnings for large queries with alternative suggestions  
+✅ **Explain Mode** - Dry-run queries to see estimates before execution  
+✅ **Data Quality Alerts** - Detect time gaps, price outliers, null values, and duplicates  
+✅ **Account Status** - Server uptime, cache stats, and tool usage metrics  
+✅ **Quick Analysis** - One-call comprehensive symbol report  
 
 ## Quick Start
 
@@ -73,6 +83,73 @@ Retrieve historical market data (trades, OHLCV, market depth, etc.)
 - `end` - End date (YYYY-MM-DD)
 - `schema` - Data schema (e.g., "trades", "ohlcv-1m", "mbp-1")
 - `limit` - Max records to return (default: 1000)
+- `explain` - Preview query estimates without executing (default: false) ✨
+- `force_refresh` - Bypass cache and fetch fresh data (default: false) ✨
+
+**Example:**
+```python
+# Get ES futures trades with explain mode
+get_historical_data(
+    dataset="GLBX.MDP3",
+    symbols="ES.FUT",
+    start="2024-01-15",
+    end="2024-01-15",
+    schema="trades",
+    explain=True  # Preview query before execution
+)
+```
+
+### 🔹 get_account_status ✨
+Get comprehensive server status and account information
+
+**Returns:**
+- Server uptime and health
+- Cache statistics (hit rate, entries)
+- API usage metrics
+- Tool usage breakdown
+
+### 🔹 quick_analysis ✨
+One-call comprehensive analysis of a symbol
+
+**Parameters:**
+- `dataset` - Dataset name (e.g., "GLBX.MDP3")
+- `symbol` - Symbol to analyze (e.g., "ES.FUT")
+- `date` - Date to analyze (YYYY-MM-DD)
+- `schema` - Data schema (default: "trades")
+
+**Returns:**
+- Symbol metadata
+- Cost estimate for full-day data
+- Sample of recent trades/bars
+- Data quality assessment
+- Trading session info
+
+**Example:**
+```python
+quick_analysis(
+    dataset="GLBX.MDP3",
+    symbol="ES.FUT",
+    date="2024-01-15"
+)
+```
+
+### 🔹 analyze_data_quality ✨
+Analyze data quality and detect issues in market data
+
+**Parameters:**
+- `dataset` - Dataset name
+- `symbols` - Comma-separated list of symbols
+- `start` - Start date (YYYY-MM-DD)
+- `end` - End date (YYYY-MM-DD)
+- `schema` - Data schema (default: "trades")
+- `limit` - Max records to analyze (default: 10000)
+
+**Returns:**
+- Quality score (0-100)
+- Time gaps detected
+- Price outliers (>3 standard deviations)
+- Null values and duplicates
+- Issues and warnings list
 
 ### 🔹 get_symbol_metadata
 Get metadata including symbology mappings and instrument definitions
@@ -528,13 +605,16 @@ The server uses structured error codes to help diagnose issues:
 ```
 databento-mcp/
 ├── server.py          # Main MCP server implementation
-├── cache.py           # File-based caching system
+├── cache.py           # File-based caching system with enhanced feedback
 ├── connection_pool.py # Databento client connection pooling
 ├── metrics.py         # Metrics collection and reporting
 ├── async_io.py        # Async file I/O operations
 ├── validation.py      # Input validation module
 ├── retry.py           # Retry logic with exponential backoff
 ├── errors.py          # Structured error codes and messages
+├── summaries.py       # Smart data summaries and insights ✨
+├── query_warnings.py  # Query size warnings and explain mode ✨
+├── data_quality.py    # Data quality alerts and scoring ✨
 ├── requirements.txt   # Python dependencies
 ├── pyproject.toml     # Project configuration
 ├── test_setup.py      # Configuration verification script
@@ -544,6 +624,10 @@ databento-mcp/
 ├── test_connection_pool.py  # Tests for connection pooling
 ├── test_metrics.py    # Tests for metrics collection
 ├── test_async_io.py   # Tests for async file I/O
+├── test_summaries.py  # Tests for data summaries ✨
+├── test_query_warnings.py  # Tests for query warnings ✨
+├── test_data_quality.py    # Tests for data quality ✨
+├── test_cache.py      # Tests for enhanced cache ✨
 ├── .env.example       # Example environment variables
 ├── mcp-config.json    # Example MCP client configuration
 ├── README.md          # This file

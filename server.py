@@ -41,6 +41,14 @@ from validation import (
     validate_date_range,
 )
 from retry import with_retry, is_transient_error, RetryError  # noqa: F401 - exported for future use
+from summaries import generate_data_summary
+from query_warnings import (
+    estimate_query_size,
+    format_query_warning,
+    estimate_date_range_days,
+    generate_explain_output,
+)
+from data_quality import analyze_data_quality
 
 # Load environment variables
 load_dotenv()
@@ -470,35 +478,55 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_historical_data",
-            description="Retrieve historical market data for symbols from Databento",
+            description="""Retrieve historical market data for symbols from Databento.
+
+**Examples:**
+- Get ES futures trades: dataset="GLBX.MDP3", symbols="ES.FUT", start="2024-01-15", end="2024-01-15", schema="trades"
+- Get AAPL OHLCV bars: dataset="XNAS.ITCH", symbols="AAPL", start="2024-01-01", end="2024-01-31", schema="ohlcv-1m"
+- Get BTC order book: dataset="GLBX.MDP3", symbols="BTC.FUT", schema="mbp-10"
+
+**Tips:**
+- Use `explain=true` to preview query without executing
+- Use `force_refresh=true` to bypass cache
+- Start with small date ranges and use `limit` parameter""",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "dataset": {
                         "type": "string",
-                        "description": "Dataset name (e.g., 'GLBX.MDP3', 'XNAS.ITCH')"
+                        "description": "Dataset name (e.g., 'GLBX.MDP3' for CME Globex, 'XNAS.ITCH' for Nasdaq)"
                     },
                     "symbols": {
                         "type": "string",
-                        "description": "Comma-separated list of symbols to retrieve"
+                        "description": "Comma-separated list of symbols (e.g., 'ES.FUT', 'AAPL, MSFT')"
                     },
                     "start": {
                         "type": "string",
-                        "description": "Start date in YYYY-MM-DD format"
+                        "description": "Start date in YYYY-MM-DD or ISO 8601 format (e.g., '2024-01-15')"
                     },
                     "end": {
                         "type": "string",
-                        "description": "End date in YYYY-MM-DD format"
+                        "description": "End date in YYYY-MM-DD or ISO 8601 format (e.g., '2024-01-16')"
                     },
                     "schema": {
                         "type": "string",
-                        "description": "Data schema (e.g., 'trades', 'ohlcv-1m', 'mbp-1', 'tbbo')",
+                        "description": "Data schema: 'trades', 'ohlcv-1m', 'ohlcv-1h', 'ohlcv-1d', 'mbp-1', 'mbp-10', 'tbbo', 'mbo'",
                         "default": "trades"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of records to return (default: 1000)",
+                        "description": "Maximum records to return (default: 1000, max: 100000)",
                         "default": 1000
+                    },
+                    "explain": {
+                        "type": "boolean",
+                        "description": "Preview query estimates without executing (no API call)",
+                        "default": False
+                    },
+                    "force_refresh": {
+                        "type": "boolean",
+                        "description": "Bypass cache and fetch fresh data",
+                        "default": False
                     }
                 },
                 "required": ["dataset", "symbols", "start", "end"]
@@ -986,7 +1014,15 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_metrics",
-            description="Get server performance metrics and usage statistics",
+            description="""Get server performance metrics and usage statistics.
+
+**Returns:**
+- Server uptime
+- API call counts
+- Cache hit/miss rates
+- Per-tool latency and success rates
+
+**Example:** get_metrics(reset=false) to view current stats""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -996,6 +1032,114 @@ async def list_tools() -> list[Tool]:
                         "default": False
                     }
                 }
+            }
+        ),
+        Tool(
+            name="get_account_status",
+            description="""Get comprehensive server status and account information.
+
+**Returns:**
+- Server uptime and health
+- Cache statistics (hit rate, entries)
+- API usage metrics
+- Tool usage breakdown
+- Memory and performance stats
+
+**Example:** get_account_status() for a full server overview""",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="quick_analysis",
+            description="""One-call comprehensive analysis of a symbol.
+
+Combines: metadata + cost estimate + sample data + trading session info + data quality check.
+
+**Example:**
+- quick_analysis(dataset="GLBX.MDP3", symbol="ES.FUT", date="2024-01-15")
+- quick_analysis(dataset="XNAS.ITCH", symbol="AAPL", date="2024-01-15", schema="ohlcv-1m")
+
+**Returns:**
+- Symbol metadata and instrument info
+- Cost estimate for full-day data
+- Sample of recent trades/bars
+- Current trading session context
+- Data quality assessment""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (e.g., 'GLBX.MDP3', 'XNAS.ITCH')"
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Symbol to analyze (e.g., 'ES.FUT', 'AAPL')"
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date to analyze in YYYY-MM-DD format"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (default: 'trades')",
+                        "default": "trades"
+                    }
+                },
+                "required": ["dataset", "symbol", "date"]
+            }
+        ),
+        Tool(
+            name="analyze_data_quality",
+            description="""Analyze data quality and detect issues in market data.
+
+**Detects:**
+- Time gaps in data
+- Price outliers (>3 standard deviations)
+- Null values and missing data
+- Duplicate records
+
+**Returns:**
+- Quality score (0-100)
+- List of issues and warnings
+- Detailed breakdown of problems
+
+**Example:**
+- First retrieve data with get_historical_data
+- Then analyze_data_quality(dataset="GLBX.MDP3", symbols="ES.FUT", start="2024-01-15", end="2024-01-15")""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols"
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End date in YYYY-MM-DD format"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (default: 'trades')",
+                        "default": "trades"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum records to analyze (default: 10000)",
+                        "default": 10000
+                    }
+                },
+                "required": ["dataset", "symbols", "start", "end"]
             }
         )
     ]
@@ -1086,18 +1230,66 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         dataset = arguments["dataset"]
         start = arguments["start"]
         end = arguments["end"]
+        explain_mode = arguments.get("explain", False)
+        force_refresh = arguments.get("force_refresh", False)
 
         # Create cache key
         cache_key = f"historical:{dataset}:{','.join(sorted(symbols))}:{start}:{end}:{schema}:{limit}"
 
-        # Check cache
-        cached_data = cache.get(cache_key)
-        if cached_data is not None:
+        # Handle explain mode (dry run)
+        if explain_mode:
+            try:
+                # Get cost estimate without fetching data
+                logger.debug("Explain mode: fetching cost estimate")
+                cost = client.metadata.get_cost(
+                    dataset=dataset,
+                    symbols=symbols,
+                    schema=schema,
+                    start=start,
+                    end=end
+                )
+                record_count = client.metadata.get_record_count(
+                    dataset=dataset,
+                    symbols=symbols,
+                    schema=schema,
+                    start=start,
+                    end=end
+                )
+                size_bytes = client.metadata.get_billable_size(
+                    dataset=dataset,
+                    symbols=symbols,
+                    schema=schema,
+                    start=start,
+                    end=end
+                )
+
+                # Get cache status
+                cache_status = cache.get_cache_status(cache_key)
+
+                result = generate_explain_output(
+                    dataset=dataset,
+                    symbols=symbols,
+                    schema=schema,
+                    start=start,
+                    end=end,
+                    record_count=record_count,
+                    size_bytes=size_bytes,
+                    cost_usd=cost,
+                    cache_status=cache_status,
+                )
+                return [TextContent(type="text", text=result)]
+            except Exception as e:
+                logger.error(f"Error in explain mode: {e}", exc_info=True)
+                return [TextContent(type="text", text=f"Error generating explain output: {str(e)}")]
+
+        # Check cache with enhanced feedback
+        cached_data, cache_info = cache.get_with_info(cache_key, force_refresh=force_refresh)
+        if cached_data is not None and cache_info is not None:
             logger.debug(f"Cache hit for get_historical_data: {cache_key}")
             get_metrics().record_cache_hit()
             return [TextContent(
                 type="text",
-                text=f"[Cached] Historical data for {', '.join(symbols)}:\n\n{cached_data}"
+                text=f"{cache_info.format_feedback()} Historical data for {', '.join(symbols)}:\n\n{cached_data}"
             )]
 
         get_metrics().record_cache_miss()
@@ -1127,6 +1319,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"Records returned: {len(df)}\n\n"
             result += f"Sample data (first 10 rows):\n{df.head(10).to_string()}\n\n"
             result += f"Summary statistics:\n{df.describe().to_string()}"
+
+            # Add smart data summary
+            data_summary = generate_data_summary(df, schema)
+            result += f"\n\n{data_summary}"
 
             # Cache the result
             cache.set(cache_key, result, ttl=3600)
@@ -2397,6 +2593,236 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         except Exception as e:
             logger.error(f"Error in get_metrics: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error getting metrics: {str(e)}")]
+
+    elif name == "get_account_status":
+        try:
+            # Server status
+            metrics_collector = get_metrics()
+            summary = metrics_collector.get_summary()
+            
+            result = "🖥️ **Account & Server Status**\n\n"
+            
+            # Server health
+            result += "🟢 **Server Status**: Running\n"
+            
+            # Uptime
+            uptime_seconds = summary['uptime_seconds']
+            if uptime_seconds < 60:
+                uptime_str = f"{uptime_seconds:.0f} seconds"
+            elif uptime_seconds < 3600:
+                uptime_str = f"{uptime_seconds / 60:.1f} minutes"
+            elif uptime_seconds < 86400:
+                uptime_str = f"{uptime_seconds / 3600:.1f} hours"
+            else:
+                uptime_str = f"{uptime_seconds / 86400:.1f} days"
+            result += f"⏱️ **Uptime**: {uptime_str}\n\n"
+            
+            # API Statistics
+            result += "🌐 **API Statistics**\n"
+            result += f"  Total API Calls: {summary['total_api_calls']:,}\n\n"
+            
+            # Cache Statistics
+            cache_stats = summary["cache"]
+            total_cache_ops = cache_stats['hits'] + cache_stats['misses']
+            result += "📦 **Cache Statistics**\n"
+            result += f"  Cache Hits: {cache_stats['hits']:,}\n"
+            result += f"  Cache Misses: {cache_stats['misses']:,}\n"
+            result += f"  Hit Rate: {cache_stats['hit_rate']:.1%}\n"
+            result += f"  Total Operations: {total_cache_ops:,}\n\n"
+            
+            # Tool Usage Summary
+            tools = summary["tools"]
+            if tools:
+                result += "🔧 **Tool Usage Summary**\n"
+                total_calls = sum(t['calls'] for t in tools.values())
+                total_successes = sum(t['successes'] for t in tools.values())
+                total_errors = sum(t['errors'] for t in tools.values())
+                result += f"  Total Tool Calls: {total_calls:,}\n"
+                result += f"  Successful: {total_successes:,}\n"
+                result += f"  Errors: {total_errors:,}\n"
+                if total_calls > 0:
+                    result += f"  Overall Success Rate: {total_successes / total_calls:.1%}\n"
+                
+                # Top used tools
+                result += "\n  📊 Top Used Tools:\n"
+                sorted_tools = sorted(tools.items(), key=lambda x: x[1]['calls'], reverse=True)
+                for tool_name, tool_stats in sorted_tools[:5]:
+                    result += f"    • {tool_name}: {tool_stats['calls']} calls\n"
+            else:
+                result += "🔧 **Tool Usage**: No tools used yet\n"
+            
+            # Configuration
+            result += "\n⚙️ **Configuration**\n"
+            result += f"  Log Level: {os.getenv('DATABENTO_LOG_LEVEL', 'INFO')}\n"
+            result += f"  Data Directory: {ALLOWED_DATA_DIR or 'Not restricted'}\n"
+            result += f"  Cache Directory: {cache.cache_dir}\n"
+            
+            logger.info("Successfully retrieved account status")
+            return [TextContent(type="text", text=result)]
+            
+        except Exception as e:
+            logger.error(f"Error in get_account_status: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error getting account status: {str(e)}")]
+
+    elif name == "quick_analysis":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbol = arguments["symbol"].strip()
+            if not symbol:
+                return [TextContent(type="text", text="Validation error: symbol cannot be empty")]
+            validate_date_format(arguments["date"], "date")
+            schema = arguments.get("schema", "trades")
+            validate_schema(schema)
+        except ValidationError as e:
+            logger.warning(f"Validation error in quick_analysis: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
+        dataset = arguments["dataset"]
+        date = arguments["date"]
+
+        result = f"🔍 **Quick Analysis: {symbol}**\n"
+        result += f"Dataset: {dataset} | Date: {date} | Schema: {schema}\n"
+        result += "=" * 50 + "\n\n"
+
+        try:
+            # 1. Get cost estimate
+            result += "💰 **Cost Estimate**\n"
+            try:
+                cost = client.metadata.get_cost(
+                    dataset=dataset,
+                    symbols=[symbol],
+                    schema=schema,
+                    start=date,
+                    end=date
+                )
+                record_count = client.metadata.get_record_count(
+                    dataset=dataset,
+                    symbols=[symbol],
+                    schema=schema,
+                    start=date,
+                    end=date
+                )
+                size_bytes = client.metadata.get_billable_size(
+                    dataset=dataset,
+                    symbols=[symbol],
+                    schema=schema,
+                    start=date,
+                    end=date
+                )
+                result += f"  Estimated Records: {record_count:,}\n"
+                result += f"  Estimated Size: {size_bytes / (1024*1024):.2f} MB\n"
+                result += f"  Estimated Cost: ${cost:.4f} USD\n\n"
+            except Exception as e:
+                result += f"  Could not estimate cost: {str(e)}\n\n"
+
+            # 2. Get sample data
+            result += "📊 **Sample Data**\n"
+            try:
+                get_metrics().record_api_call()
+                pool_client = get_pool().get_historical_client()
+                data = pool_client.timeseries.get_range(
+                    dataset=dataset,
+                    symbols=[symbol],
+                    start=date,
+                    end=date,
+                    schema=schema,
+                    limit=100  # Sample only
+                )
+                df = data.to_df()
+                result += f"  Records in sample: {len(df)}\n"
+                if len(df) > 0:
+                    result += f"  First 5 rows:\n{df.head(5).to_string()}\n\n"
+                    
+                    # Add data summary
+                    summary = generate_data_summary(df, schema)
+                    result += summary + "\n\n"
+                    
+                    # Add data quality check
+                    quality_report = analyze_data_quality(df, schema)
+                    result += quality_report.to_string() + "\n"
+                else:
+                    result += "  No data available for this date\n\n"
+            except Exception as e:
+                result += f"  Could not retrieve sample data: {str(e)}\n\n"
+
+            # 3. Get session info
+            result += "\n⏰ **Trading Session Info**\n"
+            now = datetime.now(timezone.utc)
+            utc_hour = now.hour
+            if 0 <= utc_hour < 7:
+                session = "Asian"
+            elif 7 <= utc_hour < 14:
+                session = "London"
+            elif 14 <= utc_hour < 22:
+                session = "NY"
+            else:
+                session = "Off-hours"
+            result += f"  Current Session: {session}\n"
+            result += f"  Current Time (UTC): {now.strftime('%H:%M:%S')}\n"
+
+            logger.info(f"Successfully completed quick analysis for {symbol}")
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            logger.error(f"Error in quick_analysis: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error in quick analysis: {str(e)}")]
+
+    elif name == "analyze_data_quality":
+        try:
+            # Validate inputs
+            validate_dataset(arguments["dataset"])
+            symbols = validate_symbols(arguments["symbols"])
+            validate_date_format(arguments["start"], "start")
+            validate_date_format(arguments["end"], "end")
+            validate_date_range(arguments["start"], arguments["end"])
+            schema = arguments.get("schema", "trades")
+            validate_schema(schema)
+            limit = arguments.get("limit", 10000)
+            validate_numeric_range(limit, "limit", min_value=1, max_value=100000)
+        except ValidationError as e:
+            logger.warning(f"Validation error in analyze_data_quality: {e}")
+            return [TextContent(type="text", text=f"Validation error: {str(e)}")]
+
+        dataset = arguments["dataset"]
+        start = arguments["start"]
+        end = arguments["end"]
+
+        try:
+            # Fetch data
+            logger.debug("Fetching data for quality analysis")
+            get_metrics().record_api_call()
+            pool_client = get_pool().get_historical_client()
+            data = pool_client.timeseries.get_range(
+                dataset=dataset,
+                symbols=symbols,
+                start=start,
+                end=end,
+                schema=schema,
+                limit=limit
+            )
+            df = data.to_df()
+
+            if df.empty:
+                return [TextContent(
+                    type="text",
+                    text="No data available for the specified query. Cannot perform quality analysis."
+                )]
+
+            # Analyze data quality
+            report = analyze_data_quality(df, schema)
+            
+            result = f"Data Quality Analysis for {', '.join(symbols)}\n"
+            result += f"Dataset: {dataset} | Period: {start} to {end}\n"
+            result += "=" * 50 + "\n\n"
+            result += report.to_string()
+
+            logger.info(f"Successfully analyzed data quality: score={report.score}")
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            logger.error(f"Error in analyze_data_quality: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error analyzing data quality: {str(e)}")]
 
     else:
         logger.warning(f"Unknown tool called: {name}")
