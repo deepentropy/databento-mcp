@@ -1,10 +1,16 @@
 ![Databento MCP](https://raw.githubusercontent.com/deepentropy/databento-mcp/main/banner.svg)
 
-A Model Context Protocol server for Databento market data.
+<p align="center">
+  <strong>Model Context Protocol server for Databento market data</strong>
+</p>
 
-[![PyPI version](https://badge.fury.io/py/databento-mcp.svg)](https://badge.fury.io/py/databento-mcp)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://pypi.org/project/databento-mcp/"><img src="https://img.shields.io/pypi/v/databento-mcp" alt="PyPI"></a>
+  <a href="https://pypi.org/project/databento-mcp/"><img src="https://img.shields.io/pypi/pyversions/databento-mcp" alt="Python"></a>
+  <a href="https://github.com/deepentropy/databento-mcp/blob/main/LICENSE"><img src="https://img.shields.io/github/license/deepentropy/databento-mcp" alt="License"></a>
+</p>
+
+---
 
 ## Installation
 
