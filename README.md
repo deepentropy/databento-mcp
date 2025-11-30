@@ -20,6 +20,10 @@ A Model Context Protocol (MCP) server for accessing Databento's financial market
 ✅ **Input Validation** - Comprehensive validation of all inputs with clear error messages  
 ✅ **Retry Logic** - Automatic retries with exponential backoff for transient errors  
 ✅ **Structured Logging** - Configurable logging with DATABENTO_LOG_LEVEL  
+✅ **Health Check** - Diagnose API connectivity and configuration issues  
+✅ **MCP Prompts** - Built-in guides for market data workflows and troubleshooting  
+✅ **MCP Resources** - Reference documentation for schemas, datasets, and error codes  
+✅ **Structured Errors** - Error codes with actionable suggestions for Claude  
 ✅ **MCP Compatible** - Works with Claude Desktop and other MCP clients  
 
 ## Quick Start
@@ -42,6 +46,19 @@ python server.py
 See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
 
 ## Available Tools
+
+### 🔹 health_check
+Check the health and connectivity of the Databento API
+
+**Parameters:**
+- `verbose` - Include detailed diagnostic information (default: false)
+
+**Returns:**
+- API connectivity status
+- Authentication status
+- Response time
+- Available datasets count
+- Diagnostic details (when verbose=true)
 
 ### 🔹 get_historical_data
 Retrieve historical market data (trades, OHLCV, market depth, etc.)
@@ -373,6 +390,77 @@ DATABENTO_LOG_LEVEL=INFO
 **Suppressed loggers:**
 - `httpx`, `httpcore`, `asyncio` are set to WARNING level to reduce noise
 
+## MCP Prompts
+
+The server provides built-in prompts to guide Claude through common workflows:
+
+### market-data-workflow
+Step-by-step guide for retrieving market data. Use when you need to:
+- Discover available datasets
+- Check data availability for a date range
+- Estimate costs before querying
+- Retrieve and export data
+
+### cost-aware-query
+Guide for estimating costs before running expensive queries.
+
+**Arguments:**
+- `dataset` - The dataset you want to query (optional, defaults to GLBX.MDP3)
+
+### troubleshooting
+Diagnose and resolve common issues with the Databento MCP server. Covers:
+- Validation errors (E1xxx)
+- API errors (E2xxx)
+- File errors (E3xxx)
+- Data errors (E4xxx)
+
+## MCP Resources
+
+Reference documentation available as MCP resources:
+
+| Resource URI | Description |
+|--------------|-------------|
+| `databento://schemas` | Documentation of available data schemas |
+| `databento://datasets` | Common datasets and their descriptions |
+| `databento://error-codes` | Complete list of error codes and meanings |
+
+## Error Codes
+
+The server uses structured error codes to help diagnose issues:
+
+### Validation Errors (E1xxx)
+| Code | Description |
+|------|-------------|
+| E1001 | Invalid date format |
+| E1002 | Invalid symbols |
+| E1003 | Invalid dataset |
+| E1004 | Invalid schema |
+| E1005 | Invalid parameter |
+| E1006 | Invalid date range |
+
+### API Errors (E2xxx)
+| Code | Description |
+|------|-------------|
+| E2001 | API unavailable |
+| E2002 | Rate limited |
+| E2003 | Authentication failed |
+| E2004 | Resource not found |
+| E2005 | General API error |
+
+### File Errors (E3xxx)
+| Code | Description |
+|------|-------------|
+| E3001 | File not found |
+| E3002 | Invalid path |
+| E3003 | Write error |
+| E3004 | Read error |
+
+### Data Errors (E4xxx)
+| Code | Description |
+|------|-------------|
+| E4001 | No data available |
+| E4002 | Parse error |
+
 ## Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Step-by-step setup guide
@@ -387,9 +475,13 @@ databento-mcp/
 ├── cache.py           # File-based caching system
 ├── validation.py      # Input validation module
 ├── retry.py           # Retry logic with exponential backoff
+├── errors.py          # Structured error codes and messages
 ├── requirements.txt   # Python dependencies
 ├── pyproject.toml     # Project configuration
 ├── test_setup.py      # Configuration verification script
+├── test_errors.py     # Tests for error handling
+├── test_validation.py # Tests for input validation
+├── test_retry.py      # Tests for retry logic
 ├── .env.example       # Example environment variables
 ├── mcp-config.json    # Example MCP client configuration
 ├── README.md          # This file

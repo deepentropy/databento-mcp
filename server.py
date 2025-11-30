@@ -16,6 +16,11 @@ from mcp.types import (
     Resource,
     Tool,
     TextContent,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
+    GetPromptResult,
+    TextResourceContents,
 )
 from mcp.server.stdio import stdio_server
 from dotenv import load_dotenv
@@ -196,13 +201,270 @@ def serialize_data(data: Any) -> str:
 @app.list_resources()
 async def list_resources() -> list[Resource]:
     """List available resources."""
-    return []
+    return [
+        Resource(
+            uri="databento://schemas",
+            name="Databento Schema Reference",
+            description="Documentation of available data schemas",
+            mimeType="text/markdown"
+        ),
+        Resource(
+            uri="databento://datasets",
+            name="Databento Dataset Reference",
+            description="Common datasets and their descriptions",
+            mimeType="text/markdown"
+        ),
+        Resource(
+            uri="databento://error-codes",
+            name="Error Code Reference",
+            description="Complete list of error codes and their meanings",
+            mimeType="text/markdown"
+        )
+    ]
+
+
+@app.read_resource()
+async def read_resource(uri: str) -> list[TextResourceContents]:
+    """Read a resource by URI."""
+    if uri == "databento://schemas":
+        content = """# Databento Schemas
+
+## Trade Data
+- `trades` - Individual trades with price, size, timestamp
+- `tbbo` - Top of book best bid/offer
+
+## Order Book
+- `mbp-1` - Market by price (top level)
+- `mbp-10` - Market by price (10 levels)
+- `mbo` - Market by order (full book)
+
+## OHLCV Bars
+- `ohlcv-1s` - 1-second bars
+- `ohlcv-1m` - 1-minute bars
+- `ohlcv-1h` - 1-hour bars
+- `ohlcv-1d` - Daily bars
+
+## Reference
+- `definition` - Instrument definitions
+- `statistics` - Market statistics
+- `status` - Trading status
+- `imbalance` - Auction imbalance"""
+        return [TextResourceContents(uri=uri, mimeType="text/markdown", text=content)]
+
+    elif uri == "databento://datasets":
+        content = """# Common Databento Datasets
+
+## Futures & Options
+- `GLBX.MDP3` - CME Globex (ES, NQ, CL, etc.)
+- `IFEU.IMPACT` - ICE Futures Europe
+
+## US Equities
+- `XNAS.ITCH` - Nasdaq TotalView
+- `XNYS.PILLAR` - NYSE
+- `DBEQ.BASIC` - Consolidated equities
+
+## Options
+- `OPRA.PILLAR` - US Options"""
+        return [TextResourceContents(uri=uri, mimeType="text/markdown", text=content)]
+
+    elif uri == "databento://error-codes":
+        content = """# Error Code Reference
+
+## E1xxx - Validation Errors
+- E1001: Invalid date format
+- E1002: Invalid symbols
+- E1003: Invalid dataset
+- E1004: Invalid schema
+- E1005: Invalid parameter
+- E1006: Invalid date range
+
+## E2xxx - API Errors
+- E2001: API unavailable
+- E2002: Rate limited
+- E2003: Authentication failed
+- E2004: Resource not found
+- E2005: General API error
+
+## E3xxx - File Errors
+- E3001: File not found
+- E3002: Invalid path
+- E3003: Write error
+- E3004: Read error
+
+## E4xxx - Data Errors
+- E4001: No data available
+- E4002: Parse error"""
+        return [TextResourceContents(uri=uri, mimeType="text/markdown", text=content)]
+
+    else:
+        raise ValueError(f"Unknown resource: {uri}")
+
+
+@app.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """List available prompts for guiding Claude."""
+    return [
+        Prompt(
+            name="market-data-workflow",
+            description="Step-by-step guide for retrieving market data from Databento",
+            arguments=[]
+        ),
+        Prompt(
+            name="cost-aware-query",
+            description="How to estimate costs before running expensive queries",
+            arguments=[
+                PromptArgument(
+                    name="dataset",
+                    description="The dataset you want to query",
+                    required=False
+                )
+            ]
+        ),
+        Prompt(
+            name="troubleshooting",
+            description="Diagnose and resolve common issues with the Databento MCP server",
+            arguments=[]
+        )
+    ]
+
+
+@app.get_prompt()
+async def get_prompt(name: str, arguments: dict = None) -> GetPromptResult:
+    """Get a prompt by name."""
+    if name == "market-data-workflow":
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text="""# Market Data Retrieval Workflow
+
+## Step 1: Discover Available Data
+Use `list_datasets` to see all available Databento datasets.
+
+## Step 2: Check Data Availability
+Use `get_dataset_range` to see the date range for your chosen dataset.
+
+## Step 3: Estimate Costs (Important!)
+ALWAYS use `get_cost` before retrieving large amounts of data:
+- Estimates cost in USD
+- Shows record count
+- Helps avoid unexpected charges
+
+## Step 4: Retrieve Data
+Use `get_historical_data` for historical data or `get_live_data` for real-time streaming.
+
+## Step 5: Export if Needed
+Use `export_to_parquet` or `write_dbn_file` to save data locally.
+
+## Tips:
+- Start with small date ranges
+- Use the cache (data is cached for 1 hour)
+- Check `get_session_info` for trading hours context"""
+                    )
+                )
+            ]
+        )
+    elif name == "cost-aware-query":
+        dataset = arguments.get("dataset", "GLBX.MDP3") if arguments else "GLBX.MDP3"
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=f"""# Cost-Aware Querying Guide
+
+Before retrieving data from {dataset}, follow these steps:
+
+## 1. Always Check Cost First
+```
+get_cost(
+    dataset="{dataset}",
+    symbols="YOUR_SYMBOL",
+    schema="trades",
+    start="2024-01-01",
+    end="2024-01-02"
+)
+```
+
+## 2. Cost Factors
+- **Schema**: `trades` and `mbo` are most expensive, `ohlcv-1d` is cheapest
+- **Date Range**: Longer ranges = higher cost
+- **Symbols**: More symbols = higher cost
+
+## 3. Cost-Saving Tips
+- Use `ohlcv-*` schemas instead of `trades` when possible
+- Limit date ranges
+- Use batch jobs for large downloads (cheaper than real-time)
+
+## 4. If Cost is Too High
+- Reduce date range
+- Use a less granular schema
+- Submit a batch job instead"""
+                    )
+                )
+            ]
+        )
+    elif name == "troubleshooting":
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text="""# Troubleshooting Guide
+
+## Check Server Health First
+Run `health_check` with `verbose=true` to diagnose issues.
+
+## Common Issues
+
+### E1xxx - Validation Errors
+- **E1001**: Invalid date format. Use YYYY-MM-DD or ISO 8601.
+- **E1002**: Invalid symbols. Check symbol format for your dataset.
+- **E1003**: Invalid dataset. Use `list_datasets` to see valid options.
+
+### E2xxx - API Errors
+- **E2001**: API unavailable. Check status.databento.com
+- **E2002**: Rate limited. Wait 60 seconds and retry.
+- **E2003**: Auth failed. Check DATABENTO_API_KEY.
+
+### E3xxx - File Errors
+- **E3001**: File not found. Check the file path.
+- **E3002**: Invalid path. Paths must be within DATABENTO_DATA_DIR.
+
+## Still Having Issues?
+1. Check logs (set DATABENTO_LOG_LEVEL=DEBUG)
+2. Clear cache with `clear_cache`
+3. Verify API key at databento.com/portal"""
+                    )
+                )
+            ]
+        )
+    else:
+        raise ValueError(f"Unknown prompt: {name}")
 
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools."""
     return [
+        Tool(
+            name="health_check",
+            description="Check the health and connectivity of the Databento API. Use this to diagnose connection issues or verify the server is working properly.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "verbose": {
+                        "type": "boolean",
+                        "description": "Include detailed diagnostic information",
+                        "default": False
+                    }
+                }
+            }
+        ),
         Tool(
             name="get_historical_data",
             description="Retrieve historical market data for symbols from Databento",
@@ -727,7 +989,68 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
     logger.info(f"Tool call: {name} with arguments: {arguments}")
 
-    if name == "get_historical_data":
+    if name == "health_check":
+        verbose = arguments.get("verbose", False) if arguments else False
+        
+        try:
+            # Test API connectivity
+            start_time = time.perf_counter()
+            datasets = client.metadata.list_datasets()
+            response_time = time.perf_counter() - start_time
+            
+            # Build health status
+            result = "🟢 Health Check: HEALTHY\n\n"
+            result += "✅ API Connectivity: OK\n"
+            result += "✅ Authentication: Valid\n"
+            result += f"✅ Response Time: {response_time*1000:.0f}ms\n"
+            result += f"✅ Datasets Available: {len(datasets)}\n"
+            
+            if verbose:
+                result += "\n📋 Diagnostic Details:\n"
+                # Safely display API key suffix (only if key is long enough)
+                if api_key and len(api_key) >= 8:
+                    key_display = f"{'*' * 8}...{api_key[-4:]}"
+                else:
+                    key_display = "Set (hidden)" if api_key else "Not set"
+                result += f"  - API Key: {key_display}\n"
+                result += f"  - Log Level: {os.getenv('DATABENTO_LOG_LEVEL', 'INFO')}\n"
+                result += f"  - Data Directory: {ALLOWED_DATA_DIR or 'Not restricted'}\n"
+                result += f"  - Cache Directory: {cache.cache_dir}\n"
+                result += "\n📊 Sample Datasets:\n"
+                for dataset in datasets[:5]:
+                    result += f"  - {dataset}\n"
+                if len(datasets) > 5:
+                    result += f"  ... and {len(datasets) - 5} more\n"
+            
+            logger.info("Health check passed")
+            return [TextContent(type="text", text=result)]
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            result = "🔴 Health Check: UNHEALTHY\n\n"
+            
+            if "401" in error_str or "auth" in error_str or "unauthorized" in error_str:
+                result += "❌ Authentication: FAILED\n"
+                result += "💡 Check that DATABENTO_API_KEY is set correctly.\n"
+            elif "429" in error_str or "rate" in error_str:
+                result += "⚠️ Rate Limited\n"
+                result += "💡 Wait 60 seconds before retrying.\n"
+            elif "timeout" in error_str or "connection" in error_str:
+                result += "❌ API Connectivity: FAILED\n"
+                result += "💡 Check your internet connection or visit status.databento.com\n"
+            else:
+                result += f"❌ Error: {str(e)}\n"
+                result += "💡 Check logs for more details (set DATABENTO_LOG_LEVEL=DEBUG).\n"
+            
+            if verbose:
+                result += "\n📋 Error Details:\n"
+                result += f"  - Exception Type: {type(e).__name__}\n"
+                result += f"  - Message: {str(e)}\n"
+            
+            logger.error(f"Health check failed: {e}", exc_info=True)
+            return [TextContent(type="text", text=result)]
+
+    elif name == "get_historical_data":
         try:
             # Validate inputs
             validate_dataset(arguments["dataset"])
