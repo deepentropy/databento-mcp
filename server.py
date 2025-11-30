@@ -5,9 +5,12 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import databento as db
+import pyarrow.parquet as pq
+import pandas as pd
 from mcp.server import Server
 from mcp.types import (
     Resource,
@@ -35,6 +38,106 @@ client = db.Historical(api_key)
 
 # Create MCP server
 app = Server("databento-mcp")
+
+# Get allowed data directory from environment variable
+ALLOWED_DATA_DIR = os.getenv("DATABENTO_DATA_DIR")
+
+# Display limits for output
+MAX_SYMBOLS_DISPLAY = 50
+MAX_MAPPINGS_DISPLAY = 20
+
+
+def ensure_dbn_extension(path: str, compression: str) -> str:
+    """
+    Ensure the path has the correct DBN file extension based on compression.
+    
+    Args:
+        path: The file path
+        compression: Compression type ("zstd" or "none")
+        
+    Returns:
+        Path with correct extension
+    """
+    if compression == "zstd":
+        if path.endswith(".dbn"):
+            return path + ".zst"
+        elif not path.endswith(".dbn.zst"):
+            return path + ".dbn.zst"
+    elif compression == "none":
+        if not path.endswith(".dbn"):
+            return path + ".dbn"
+    return path
+
+
+def ensure_parquet_extension(path: str) -> str:
+    """
+    Ensure the path has the .parquet extension.
+    
+    Args:
+        path: The file path
+        
+    Returns:
+        Path with .parquet extension
+    """
+    if not path.endswith(".parquet"):
+        return path + ".parquet"
+    return path
+
+
+def validate_file_path(file_path: str, must_exist: bool = False) -> Path:
+    """
+    Validate and normalize a file path for security.
+    
+    Args:
+        file_path: The path to validate
+        must_exist: Whether the file must already exist
+        
+    Returns:
+        Resolved Path object
+        
+    Raises:
+        ValueError: If the path is invalid or outside allowed directory
+        FileNotFoundError: If must_exist is True and file doesn't exist
+    """
+    # Convert to Path object
+    path = Path(file_path)
+    
+    # Resolve to absolute path (follows symlinks)
+    try:
+        resolved_path = path.resolve()
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Invalid file path: {e}")
+    
+    # If DATABENTO_DATA_DIR is set, enforce it
+    if ALLOWED_DATA_DIR:
+        allowed_dir = Path(ALLOWED_DATA_DIR).resolve()
+        try:
+            resolved_path.relative_to(allowed_dir)
+        except ValueError:
+            raise ValueError(
+                f"File path must be within DATABENTO_DATA_DIR: {allowed_dir}"
+            )
+    else:
+        # Without DATABENTO_DATA_DIR, ensure path doesn't escape current working directory
+        # by checking that resolved path is within cwd or an absolute path was given
+        cwd = Path.cwd().resolve()
+        try:
+            # Check if resolved path is within current directory
+            resolved_path.relative_to(cwd)
+        except ValueError:
+            # Allow absolute paths that don't try to traverse
+            if ".." in str(file_path):
+                raise ValueError("Directory traversal (..) not allowed in file paths")
+    
+    # Check existence if required
+    if must_exist and not resolved_path.exists():
+        raise FileNotFoundError(f"File not found: {resolved_path}")
+    
+    # Check parent directory exists for write operations
+    if not must_exist and not resolved_path.parent.exists():
+        raise ValueError(f"Parent directory does not exist: {resolved_path.parent}")
+    
+    return resolved_path
 
 
 def serialize_data(data: Any) -> str:
@@ -406,6 +509,173 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["dataset"]
+            }
+        ),
+        # DBN File Processing Tools
+        Tool(
+            name="read_dbn_file",
+            description="Read and parse a DBN file, returning the records as structured data",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the DBN file (can be .dbn or .dbn.zst for zstd-compressed)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of records to return (default: 1000)",
+                        "default": 1000
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Number of records to skip (default: 0)",
+                        "default": 0
+                    }
+                },
+                "required": ["file_path"]
+            }
+        ),
+        Tool(
+            name="get_dbn_metadata",
+            description="Get only the metadata from a DBN file without reading all records",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the DBN file"
+                    }
+                },
+                "required": ["file_path"]
+            }
+        ),
+        Tool(
+            name="write_dbn_file",
+            description="Write historical data query results directly to a DBN file",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (e.g., 'GLBX.MDP3')"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (e.g., 'trades', 'ohlcv-1m')"
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD or ISO 8601)"
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD or ISO 8601)"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path for output file"
+                    },
+                    "compression": {
+                        "type": "string",
+                        "description": "Compression type (default: 'zstd')",
+                        "enum": ["none", "zstd"],
+                        "default": "zstd"
+                    }
+                },
+                "required": ["dataset", "symbols", "schema", "start", "end", "output_path"]
+            }
+        ),
+        # Parquet Export Tools
+        Tool(
+            name="convert_dbn_to_parquet",
+            description="Convert a DBN file to Parquet format",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "Path to the input DBN file"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path for output Parquet file (optional, defaults to input_path with .parquet extension)"
+                    },
+                    "compression": {
+                        "type": "string",
+                        "description": "Parquet compression (default: 'snappy')",
+                        "enum": ["snappy", "gzip", "zstd", "none"],
+                        "default": "snappy"
+                    }
+                },
+                "required": ["input_path"]
+            }
+        ),
+        Tool(
+            name="export_to_parquet",
+            description="Query historical data and export directly to Parquet format",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (e.g., 'GLBX.MDP3')"
+                    },
+                    "symbols": {
+                        "type": "string",
+                        "description": "Comma-separated list of symbols"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Data schema (e.g., 'trades', 'ohlcv-1m')"
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD or ISO 8601)"
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD or ISO 8601)"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path for output Parquet file"
+                    },
+                    "compression": {
+                        "type": "string",
+                        "description": "Parquet compression (default: 'snappy')",
+                        "enum": ["snappy", "gzip", "zstd", "none"],
+                        "default": "snappy"
+                    }
+                },
+                "required": ["dataset", "symbols", "schema", "start", "end", "output_path"]
+            }
+        ),
+        Tool(
+            name="read_parquet_file",
+            description="Read a Parquet file and return the data",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the Parquet file"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of records to return (default: 1000)",
+                        "default": 1000
+                    },
+                    "columns": {
+                        "type": "string",
+                        "description": "Comma-separated list of columns to read (optional, reads all if not specified)"
+                    }
+                },
+                "required": ["file_path"]
             }
         )
     ]
@@ -1147,6 +1417,348 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         except Exception as e:
             return [TextContent(type="text", text=f"Error getting dataset range: {str(e)}")]
+
+    elif name == "read_dbn_file":
+        file_path = arguments["file_path"]
+        limit = arguments.get("limit", 1000)
+        offset = arguments.get("offset", 0)
+
+        try:
+            # Validate file path
+            resolved_path = validate_file_path(file_path, must_exist=True)
+
+            # Read DBN file using DBNStore
+            store = db.DBNStore.from_file(str(resolved_path))
+
+            # Get metadata
+            metadata = store.metadata
+
+            # Build metadata info
+            result = "DBN File Contents:\n\n"
+            result += "=== Metadata ===\n"
+            result += f"Version: {metadata.version}\n"
+            result += f"Dataset: {metadata.dataset}\n"
+            result += f"Schema: {metadata.schema}\n"
+            result += f"Start: {metadata.start}\n"
+            result += f"End: {metadata.end}\n"
+            result += f"Symbol Count: {metadata.symbol_cstr_len}\n"
+
+            # Convert to DataFrame for record handling
+            df = store.to_df()
+            total_records = len(df)
+            result += f"Total Records: {total_records}\n\n"
+
+            # Apply offset and limit
+            if offset > 0:
+                df = df.iloc[offset:]
+            if limit > 0:
+                df = df.head(limit)
+
+            result += f"=== Records (offset={offset}, limit={limit}) ===\n"
+            result += f"Records returned: {len(df)}\n\n"
+
+            if len(df) > 0:
+                result += "Sample data (first 10 rows):\n"
+                result += df.head(10).to_string()
+                result += "\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except FileNotFoundError as e:
+            return [TextContent(type="text", text=f"File not found: {str(e)}")]
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error reading DBN file: {str(e)}")]
+
+    elif name == "get_dbn_metadata":
+        file_path = arguments["file_path"]
+
+        try:
+            # Validate file path
+            resolved_path = validate_file_path(file_path, must_exist=True)
+
+            # Read DBN file using DBNStore
+            store = db.DBNStore.from_file(str(resolved_path))
+
+            # Get metadata
+            metadata = store.metadata
+
+            # Build response
+            result = "DBN File Metadata:\n\n"
+            result += f"File: {resolved_path}\n"
+            result += f"Version: {metadata.version}\n"
+            result += f"Dataset: {metadata.dataset}\n"
+            result += f"Schema: {metadata.schema}\n"
+            result += f"Start: {metadata.start}\n"
+            result += f"End: {metadata.end}\n"
+            result += f"Symbol Count: {metadata.symbol_cstr_len}\n"
+
+            # Get symbols if available
+            if hasattr(metadata, 'symbols') and metadata.symbols:
+                result += f"\nSymbols:\n"
+                for symbol in metadata.symbols[:MAX_SYMBOLS_DISPLAY]:
+                    result += f"  - {symbol}\n"
+                if len(metadata.symbols) > MAX_SYMBOLS_DISPLAY:
+                    result += f"  ... and {len(metadata.symbols) - MAX_SYMBOLS_DISPLAY} more\n"
+
+            # Get mappings if available
+            if hasattr(store, 'symbology') and store.symbology:
+                result += f"\nSymbology Mappings:\n"
+                mappings = store.symbology
+                count = 0
+                for key, value in mappings.items():
+                    if count >= MAX_MAPPINGS_DISPLAY:
+                        result += f"  ... and more mappings\n"
+                        break
+                    result += f"  {key}: {value}\n"
+                    count += 1
+
+            return [TextContent(type="text", text=result)]
+
+        except FileNotFoundError as e:
+            return [TextContent(type="text", text=f"File not found: {str(e)}")]
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error reading DBN metadata: {str(e)}")]
+
+    elif name == "write_dbn_file":
+        dataset = arguments["dataset"]
+        symbols = arguments["symbols"].split(",")
+        symbols = [s.strip() for s in symbols]
+        schema = arguments["schema"]
+        start = arguments["start"]
+        end = arguments["end"]
+        output_path = arguments["output_path"]
+        compression = arguments.get("compression", "zstd")
+
+        try:
+            # Determine final path with correct extension using helper function
+            final_path = ensure_dbn_extension(output_path, compression)
+            
+            # Validate the final output path
+            resolved_path = validate_file_path(final_path, must_exist=False)
+
+            # Query data and write to file
+            data = client.timeseries.get_range(
+                dataset=dataset,
+                symbols=symbols,
+                start=start,
+                end=end,
+                schema=schema,
+            )
+
+            # Write to DBN file
+            data.to_file(str(resolved_path))
+
+            # Get file stats
+            file_size = resolved_path.stat().st_size
+            df = data.to_df()
+            record_count = len(df)
+
+            # Format response
+            result = "DBN File Written:\n\n"
+            result += f"File Path: {resolved_path}\n"
+            result += f"File Size: {file_size:,} bytes ({file_size / (1024*1024):.2f} MB)\n"
+            result += f"Record Count: {record_count:,}\n"
+            result += f"Schema: {schema}\n"
+            result += f"Compression: {compression}\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Symbols: {', '.join(symbols)}\n"
+            result += f"Period: {start} to {end}\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error writing DBN file: {str(e)}")]
+
+    elif name == "convert_dbn_to_parquet":
+        input_path = arguments["input_path"]
+        output_path = arguments.get("output_path")
+        compression = arguments.get("compression", "snappy")
+
+        try:
+            # Validate input path
+            resolved_input = validate_file_path(input_path, must_exist=True)
+
+            # Generate output path if not specified
+            if output_path:
+                resolved_output = validate_file_path(output_path, must_exist=False)
+            else:
+                # Replace .dbn.zst or .dbn with .parquet
+                input_str = str(resolved_input)
+                if input_str.endswith(".dbn.zst"):
+                    output_str = input_str[:-8] + ".parquet"
+                elif input_str.endswith(".dbn"):
+                    output_str = input_str[:-4] + ".parquet"
+                else:
+                    output_str = input_str + ".parquet"
+                # Validate the auto-generated output path
+                resolved_output = validate_file_path(output_str, must_exist=False)
+
+            # Get input file size
+            input_size = resolved_input.stat().st_size
+
+            # Read DBN file
+            store = db.DBNStore.from_file(str(resolved_input))
+            df = store.to_df()
+            record_count = len(df)
+
+            # Convert compression for parquet
+            parquet_compression = compression if compression != "none" else None
+
+            # Write to Parquet
+            df.to_parquet(str(resolved_output), compression=parquet_compression)
+
+            # Get output file size
+            output_size = resolved_output.stat().st_size
+
+            # Get columns
+            columns = list(df.columns)
+
+            # Format response
+            result = "DBN to Parquet Conversion:\n\n"
+            result += f"Input File: {resolved_input}\n"
+            result += f"Output File: {resolved_output}\n"
+            result += f"Input Size: {input_size:,} bytes ({input_size / (1024*1024):.2f} MB)\n"
+            result += f"Output Size: {output_size:,} bytes ({output_size / (1024*1024):.2f} MB)\n"
+            result += f"Record Count: {record_count:,}\n"
+            result += f"Schema: {store.metadata.schema}\n"
+            result += f"Compression: {compression}\n"
+            result += f"\nColumns Written ({len(columns)}):\n"
+            for col in columns:
+                result += f"  - {col}\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except FileNotFoundError as e:
+            return [TextContent(type="text", text=f"File not found: {str(e)}")]
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error converting DBN to Parquet: {str(e)}")]
+
+    elif name == "export_to_parquet":
+        dataset = arguments["dataset"]
+        symbols = arguments["symbols"].split(",")
+        symbols = [s.strip() for s in symbols]
+        schema = arguments["schema"]
+        start = arguments["start"]
+        end = arguments["end"]
+        output_path = arguments["output_path"]
+        compression = arguments.get("compression", "snappy")
+
+        try:
+            # Determine final path with correct extension using helper function
+            final_path = ensure_parquet_extension(output_path)
+            
+            # Validate the final output path
+            resolved_path = validate_file_path(final_path, must_exist=False)
+
+            # Query data
+            data = client.timeseries.get_range(
+                dataset=dataset,
+                symbols=symbols,
+                start=start,
+                end=end,
+                schema=schema,
+            )
+
+            # Convert to DataFrame
+            df = data.to_df()
+            record_count = len(df)
+
+            # Convert compression for parquet
+            parquet_compression = compression if compression != "none" else None
+
+            # Write to Parquet
+            df.to_parquet(str(resolved_path), compression=parquet_compression)
+
+            # Get file stats
+            file_size = resolved_path.stat().st_size
+
+            # Get columns
+            columns = list(df.columns)
+
+            # Format response
+            result = "Export to Parquet:\n\n"
+            result += f"Output File: {resolved_path}\n"
+            result += f"File Size: {file_size:,} bytes ({file_size / (1024*1024):.2f} MB)\n"
+            result += f"Record Count: {record_count:,}\n"
+            result += f"Schema: {schema}\n"
+            result += f"Compression: {compression}\n"
+            result += f"Dataset: {dataset}\n"
+            result += f"Symbols: {', '.join(symbols)}\n"
+            result += f"Period: {start} to {end}\n"
+            result += f"\nColumns Written ({len(columns)}):\n"
+            for col in columns:
+                result += f"  - {col}\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error exporting to Parquet: {str(e)}")]
+
+    elif name == "read_parquet_file":
+        file_path = arguments["file_path"]
+        limit = arguments.get("limit", 1000)
+        columns_str = arguments.get("columns")
+
+        try:
+            # Validate file path
+            resolved_path = validate_file_path(file_path, must_exist=True)
+
+            # Parse columns if specified
+            columns = None
+            if columns_str:
+                columns = [c.strip() for c in columns_str.split(",")]
+
+            # Read Parquet file
+            parquet_file = pq.read_table(str(resolved_path), columns=columns)
+            df = parquet_file.to_pandas()
+
+            # Get total record count and schema
+            total_records = len(df)
+            schema_info = parquet_file.schema
+
+            # Apply limit
+            df_limited = df.head(limit)
+
+            # Get file metadata
+            parquet_metadata = pq.read_metadata(str(resolved_path))
+
+            # Build response
+            result = "Parquet File Contents:\n\n"
+            result += f"File: {resolved_path}\n"
+            result += f"Total Records: {total_records:,}\n"
+            result += f"Row Groups: {parquet_metadata.num_row_groups}\n"
+            result += f"Created By: {parquet_metadata.created_by}\n\n"
+
+            result += f"=== Schema ({len(schema_info)}) ===\n"
+            for field in schema_info:
+                result += f"  {field.name}: {field.type}\n"
+
+            result += f"\n=== Records (limit={limit}) ===\n"
+            result += f"Records returned: {len(df_limited)}\n\n"
+
+            if len(df_limited) > 0:
+                result += "Sample data (first 10 rows):\n"
+                result += df_limited.head(10).to_string()
+                result += "\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except FileNotFoundError as e:
+            return [TextContent(type="text", text=f"File not found: {str(e)}")]
+        except ValueError as e:
+            return [TextContent(type="text", text=f"Invalid path: {str(e)}")]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error reading Parquet file: {str(e)}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
