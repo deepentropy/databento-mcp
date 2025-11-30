@@ -3,4 +3,5 @@ mcp>=0.9.0
 python-dotenv>=1.0.0
 pyarrow>=13.0.0
 pandas>=1.5.3
+aiofiles>=23.0.0
 

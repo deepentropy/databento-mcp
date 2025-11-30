@@ -25,6 +25,9 @@ A Model Context Protocol (MCP) server for accessing Databento's financial market
 ✅ **MCP Resources** - Reference documentation for schemas, datasets, and error codes  
 ✅ **Structured Errors** - Error codes with actionable suggestions for Claude  
 ✅ **MCP Compatible** - Works with Claude Desktop and other MCP clients  
+✅ **Connection Pooling** - Singleton connection pool for better performance  
+✅ **Metrics & Telemetry** - Server performance metrics and usage statistics  
+✅ **Async File I/O** - Optimized async operations for file processing  
 
 ## Quick Start
 
@@ -324,11 +327,53 @@ Read a Parquet file and return the data
 - Records (up to limit)
 - File metadata
 
+### 🔹 get_metrics
+Get server performance metrics and usage statistics
+
+**Parameters:**
+- `reset` - Reset metrics after retrieval (default: false)
+
+**Returns:**
+- Server uptime
+- Total API calls
+- Cache hit/miss statistics and hit rate
+- Per-tool metrics:
+  - Call count
+  - Success/error counts
+  - Success rate
+  - Latency statistics (avg, min, max, p95, p99)
+
 ## File Path Security
 
 The server implements path validation to prevent directory traversal attacks:
 - Paths containing `..` are rejected
 - Set `DATABENTO_DATA_DIR` environment variable to restrict file operations to a specific directory
+
+## Connection Pooling
+
+The server uses a singleton connection pool for Databento clients to improve performance:
+- Historical client is reused across tool calls
+- Live client is created fresh for each streaming request (not reusable after stop)
+- Pool can be reset for error recovery
+
+## Metrics & Telemetry
+
+The server collects comprehensive metrics for monitoring and debugging:
+
+### Metrics Collected
+- **API calls**: Total number of Databento API calls
+- **Cache performance**: Hit/miss counts and hit rate
+- **Tool performance**: Per-tool call counts, success rates, and latency statistics
+- **Latency percentiles**: p95 and p99 latency for each tool
+
+### Usage
+```python
+# Retrieve metrics via the get_metrics tool
+# Returns JSON with uptime, API calls, cache stats, and per-tool metrics
+```
+
+### Configuration
+- Set `DATABENTO_METRICS_ENABLED=false` to disable metrics collection
 
 ## Input Validation
 
@@ -356,6 +401,17 @@ The server includes a retry module for handling transient API errors:
 - **Transient error detection**: Connection errors, timeouts, and 502/503/504 errors are retried
 - **Configurable retries**: Default is 3 retry attempts
 - **Logging**: All retry attempts are logged with error details
+
+## Environment Variables
+
+The server supports the following environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABENTO_API_KEY` | **Required.** Your Databento API key | - |
+| `DATABENTO_DATA_DIR` | Restrict file operations to this directory | Not set (current directory) |
+| `DATABENTO_LOG_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO |
+| `DATABENTO_METRICS_ENABLED` | Enable/disable metrics collection | true |
 
 ## Logging
 
@@ -473,6 +529,9 @@ The server uses structured error codes to help diagnose issues:
 databento-mcp/
 ├── server.py          # Main MCP server implementation
 ├── cache.py           # File-based caching system
+├── connection_pool.py # Databento client connection pooling
+├── metrics.py         # Metrics collection and reporting
+├── async_io.py        # Async file I/O operations
 ├── validation.py      # Input validation module
 ├── retry.py           # Retry logic with exponential backoff
 ├── errors.py          # Structured error codes and messages
@@ -482,6 +541,9 @@ databento-mcp/
 ├── test_errors.py     # Tests for error handling
 ├── test_validation.py # Tests for input validation
 ├── test_retry.py      # Tests for retry logic
+├── test_connection_pool.py  # Tests for connection pooling
+├── test_metrics.py    # Tests for metrics collection
+├── test_async_io.py   # Tests for async file I/O
 ├── .env.example       # Example environment variables
 ├── mcp-config.json    # Example MCP client configuration
 ├── README.md          # This file
