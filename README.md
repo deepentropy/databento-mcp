@@ -315,6 +315,66 @@ Get the available date range for a dataset
 - Start date (earliest available data)
 - End date (latest available data, or "ongoing" if active)
 
+### 🔹 list_schemas
+List all available data schemas from Databento
+
+**Parameters:** None
+
+**Returns:**
+- List of all available schemas organized by category:
+  - Trade Data: trades, tbbo
+  - Order Book: mbp-1, mbp-10, mbo
+  - OHLCV Bars: ohlcv-1s, ohlcv-1m, ohlcv-1h, ohlcv-1d
+  - Reference Data: definition, statistics, status, imbalance
+- Description for each schema
+
+**Note:** Results are cached for 24 hours (schemas rarely change)
+
+### 🔹 list_unit_prices
+Get current pricing information per dataset/schema combination
+
+**Parameters:**
+- `dataset` - Filter by dataset name (optional, e.g., "GLBX.MDP3")
+
+**Returns:**
+- List of unit prices showing cost per GB or per record
+- Prices grouped by dataset
+- Helps understand pricing before querying
+
+**Note:** Results are cached for 1 hour (prices may change)
+
+### 🔹 cancel_batch_job
+Cancel a pending or processing batch job
+
+**Parameters:**
+- `job_id` - The batch job ID to cancel (required)
+
+**Returns:**
+- Success/failure status
+- Final job state
+- Message explaining the result
+
+**Error Handling:**
+- Returns error if job not found
+- Returns error if job already completed or expired
+- Clears cached data for the job
+
+### 🔹 download_batch_files
+Download completed batch job files to a local directory
+
+**Parameters:**
+- `job_id` - The batch job ID (required)
+- `output_dir` - Directory to save downloaded files (required)
+- `overwrite` - Whether to overwrite existing files (optional, default: false)
+
+**Returns:**
+- List of downloaded files with paths and sizes
+- Total download size
+- Success/failure status for each file
+- Hash verification warnings if applicable
+
+**Security:** Output directory is validated using the same path security as other file operations
+
 ### 🔹 read_dbn_file
 Read and parse a DBN file, returning the records as structured data
 
