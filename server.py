@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import databento as db
-import pyarrow.parquet as pq
 from mcp.server import Server
 from mcp.types import (
     Resource,
@@ -26,6 +25,9 @@ from mcp.server.stdio import stdio_server
 from dotenv import load_dotenv
 
 from cache import Cache
+from connection_pool import get_pool
+from metrics import get_metrics, TimedOperation
+from async_io import read_dbn_file_async, write_parquet_async, read_parquet_async
 from validation import (
     ValidationError,
     validate_date_format,
@@ -74,13 +76,14 @@ logger = _configure_logging()
 # Initialize cache (1 hour default TTL)
 cache = Cache(cache_dir="cache", default_ttl=3600)
 
-# Initialize Databento client
+# Initialize Databento client using connection pool
 api_key = os.getenv("DATABENTO_API_KEY")
 if not api_key:
     print("Error: DATABENTO_API_KEY environment variable not set", file=sys.stderr)
     sys.exit(1)
 
-client = db.Historical(api_key)
+# Use connection pool for historical client
+client = get_pool().get_historical_client()
 
 # Create MCP server
 app = Server("databento-mcp")
@@ -980,6 +983,20 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["file_path"]
             }
+        ),
+        Tool(
+            name="get_metrics",
+            description="Get server performance metrics and usage statistics",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "reset": {
+                        "type": "boolean",
+                        "description": "Reset metrics after retrieval",
+                        "default": False
+                    }
+                }
+            }
         )
     ]
 
@@ -1077,25 +1094,31 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         cached_data = cache.get(cache_key)
         if cached_data is not None:
             logger.debug(f"Cache hit for get_historical_data: {cache_key}")
+            get_metrics().record_cache_hit()
             return [TextContent(
                 type="text",
                 text=f"[Cached] Historical data for {', '.join(symbols)}:\n\n{cached_data}"
             )]
 
-        try:
-            # Fetch data from Databento
-            logger.debug("Fetching historical data from Databento API")
-            data = client.timeseries.get_range(
-                dataset=dataset,
-                symbols=symbols,
-                start=start,
-                end=end,
-                schema=schema,
-                limit=limit
-            )
+        get_metrics().record_cache_miss()
 
-            # Convert to DataFrame for easier viewing
-            df = data.to_df()
+        try:
+            with TimedOperation("get_historical_data"):
+                # Fetch data from Databento using pooled client
+                logger.debug("Fetching historical data from Databento API")
+                get_metrics().record_api_call()
+                pool_client = get_pool().get_historical_client()
+                data = pool_client.timeseries.get_range(
+                    dataset=dataset,
+                    symbols=symbols,
+                    start=start,
+                    end=end,
+                    schema=schema,
+                    limit=limit
+                )
+
+                # Convert to DataFrame for easier viewing
+                df = data.to_df()
 
             # Format response
             result = f"Historical {schema} data for {', '.join(symbols)}:\n"
@@ -1382,30 +1405,32 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         dataset = arguments["dataset"]
 
         try:
-            # Create Live client
-            logger.debug(f"Starting live data stream for {duration} seconds")
-            live_client = db.Live(key=api_key)
+            with TimedOperation("get_live_data"):
+                # Create Live client from pool (new client each time as Live clients aren't reusable)
+                logger.debug(f"Starting live data stream for {duration} seconds")
+                get_metrics().record_api_call()
+                live_client = get_pool().get_live_client()
 
-            # Subscribe to data
-            live_client.subscribe(
-                dataset=dataset,
-                schema=schema,
-                symbols=symbols,
-            )
+                # Subscribe to data
+                live_client.subscribe(
+                    dataset=dataset,
+                    schema=schema,
+                    symbols=symbols,
+                )
 
-            # Collect records for the specified duration
-            records = []
-            start_time = time.time()
+                # Collect records for the specified duration
+                records = []
+                start_time = time.time()
 
-            # Use iteration with timeout
-            for record in live_client:
-                records.append(record)
-                elapsed = time.time() - start_time
-                if elapsed >= duration:
-                    break
+                # Use iteration with timeout
+                for record in live_client:
+                    records.append(record)
+                    elapsed = time.time() - start_time
+                    if elapsed >= duration:
+                        break
 
-            # Stop and cleanup
-            live_client.stop()
+                # Stop and cleanup
+                live_client.stop()
 
             # Format response
             result = f"Live Data for {', '.join(symbols)}:\n"
@@ -1955,12 +1980,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # Validate file path
             resolved_path = validate_file_path(file_path, must_exist=True)
 
-            # Read DBN file using DBNStore
+            # Read DBN file asynchronously
             logger.debug(f"Reading DBN file: {resolved_path}")
-            store = db.DBNStore.from_file(str(resolved_path))
-
-            # Get metadata
-            metadata = store.metadata
+            metadata, df = await read_dbn_file_async(resolved_path, limit=0, offset=0)
 
             # Build metadata info
             result = "DBN File Contents:\n\n"
@@ -1972,8 +1994,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"End: {metadata.end}\n"
             result += f"Symbol Count: {metadata.symbol_cstr_len}\n"
 
-            # Convert to DataFrame for record handling
-            df = store.to_df()
             total_records = len(df)
             result += f"Total Records: {total_records}\n\n"
 
@@ -2155,20 +2175,13 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # Get input file size
             input_size = resolved_input.stat().st_size
 
-            # Read DBN file
+            # Read DBN file asynchronously
             logger.debug(f"Converting DBN to Parquet: {resolved_input} -> {resolved_output}")
-            store = db.DBNStore.from_file(str(resolved_input))
-            df = store.to_df()
+            metadata, df = await read_dbn_file_async(resolved_input, limit=0, offset=0)
             record_count = len(df)
 
-            # Convert compression for parquet
-            parquet_compression = compression if compression != "none" else None
-
-            # Write to Parquet
-            df.to_parquet(str(resolved_output), compression=parquet_compression)
-
-            # Get output file size
-            output_size = resolved_output.stat().st_size
+            # Write to Parquet asynchronously
+            output_size = await write_parquet_async(df, resolved_output, compression=compression)
 
             # Get columns
             columns = list(df.columns)
@@ -2180,7 +2193,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result += f"Input Size: {input_size:,} bytes ({input_size / (1024*1024):.2f} MB)\n"
             result += f"Output Size: {output_size:,} bytes ({output_size / (1024*1024):.2f} MB)\n"
             result += f"Record Count: {record_count:,}\n"
-            result += f"Schema: {store.metadata.schema}\n"
+            result += f"Schema: {metadata.schema}\n"
             result += f"Compression: {compression}\n"
             result += f"\nColumns Written ({len(columns)}):\n"
             for col in columns:
@@ -2226,9 +2239,11 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # Validate the final output path
             resolved_path = validate_file_path(final_path, must_exist=False)
 
-            # Query data
+            # Query data using pooled client
             logger.debug(f"Exporting to Parquet: {resolved_path}")
-            data = client.timeseries.get_range(
+            get_metrics().record_api_call()
+            pool_client = get_pool().get_historical_client()
+            data = pool_client.timeseries.get_range(
                 dataset=dataset,
                 symbols=symbols,
                 start=start,
@@ -2240,14 +2255,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             df = data.to_df()
             record_count = len(df)
 
-            # Convert compression for parquet
-            parquet_compression = compression if compression != "none" else None
-
-            # Write to Parquet
-            df.to_parquet(str(resolved_path), compression=parquet_compression)
-
-            # Get file stats
-            file_size = resolved_path.stat().st_size
+            # Write to Parquet asynchronously
+            file_size = await write_parquet_async(df, resolved_path, compression=compression)
 
             # Get columns
             columns = list(df.columns)
@@ -2297,20 +2306,15 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             if columns_str:
                 columns = [c.strip() for c in columns_str.split(",")]
 
-            # Read Parquet file
+            # Read Parquet file asynchronously
             logger.debug(f"Reading Parquet file: {resolved_path}")
-            parquet_file = pq.read_table(str(resolved_path), columns=columns)
-            df = parquet_file.to_pandas()
+            df, schema_info, parquet_metadata = await read_parquet_async(
+                resolved_path, limit=limit, columns=columns
+            )
 
-            # Get total record count and schema
+            # Get total record count
             total_records = len(df)
-            schema_info = parquet_file.schema
-
-            # Apply limit
-            df_limited = df.head(limit)
-
-            # Get file metadata
-            parquet_metadata = pq.read_metadata(str(resolved_path))
+            df_limited = df
 
             # Build response
             result = "Parquet File Contents:\n\n"
@@ -2343,6 +2347,56 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         except Exception as e:
             logger.error(f"Error in read_parquet_file: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error reading Parquet file: {str(e)}")]
+
+    elif name == "get_metrics":
+        reset = arguments.get("reset", False) if arguments else False
+
+        try:
+            metrics_collector = get_metrics()
+            summary = metrics_collector.get_summary()
+
+            # Format response
+            result = "📊 Server Metrics:\n\n"
+            result += f"⏱️ Uptime: {summary['uptime_seconds']:.2f} seconds\n"
+            result += f"🌐 Total API Calls: {summary['total_api_calls']}\n\n"
+
+            # Cache metrics
+            cache_info = summary["cache"]
+            result += "📦 Cache Statistics:\n"
+            result += f"  Hits: {cache_info['hits']}\n"
+            result += f"  Misses: {cache_info['misses']}\n"
+            result += f"  Hit Rate: {cache_info['hit_rate']:.2%}\n\n"
+
+            # Tool metrics
+            tools = summary["tools"]
+            if tools:
+                result += "🔧 Tool Performance:\n"
+                for tool_name, tool_metrics in tools.items():
+                    result += f"\n  {tool_name}:\n"
+                    result += f"    Calls: {tool_metrics['calls']}\n"
+                    result += f"    Successes: {tool_metrics['successes']}\n"
+                    result += f"    Errors: {tool_metrics['errors']}\n"
+                    result += f"    Success Rate: {tool_metrics['success_rate']:.2%}\n"
+                    latency = tool_metrics["latency_ms"]
+                    result += "    Latency (ms):\n"
+                    result += f"      Avg: {latency['avg']}\n"
+                    result += f"      Min: {latency['min']}\n"
+                    result += f"      Max: {latency['max']}\n"
+                    result += f"      P95: {latency['p95']}\n"
+                    result += f"      P99: {latency['p99']}\n"
+            else:
+                result += "🔧 No tool calls recorded yet.\n"
+
+            if reset:
+                metrics_collector.reset()
+                result += "\n✅ Metrics have been reset.\n"
+
+            logger.info("Successfully retrieved metrics")
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            logger.error(f"Error in get_metrics: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error getting metrics: {str(e)}")]
 
     else:
         logger.warning(f"Unknown tool called: {name}")
